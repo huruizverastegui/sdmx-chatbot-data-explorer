@@ -38,6 +38,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Data — large/generated files not tracked in git
-# Run scripts/embed_indicators.py and scripts/partition_by_country.py to regenerate
-data/
+# Data — exclude large source CSVs; parquet files are tracked
+data/mapping_sdmx_*.csv
+data/*.json
+data/partitions/

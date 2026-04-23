@@ -7,7 +7,7 @@ Pipeline:
   3. run_quality_checks      — validate completeness, coverage, and plausibility
 """
 
-import json
+import json  # used for tool call argument parsing
 import os
 import re
 from io import StringIO
@@ -23,14 +23,16 @@ from openai import AzureOpenAI
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Partition index – loaded once
+# Data – loaded once at first use
 # ---------------------------------------------------------------------------
 
-PARTITIONS_DIR = Path("data/partitions")
-EMBEDDINGS_FILE = Path("data/embeddings/indicator_embeddings.parquet")
+ROOT = Path(__file__).parent.parent
+DICTIONARY_FILE = ROOT / "data" / "data_dictionary.parquet"
+EMBEDDINGS_FILE = ROOT / "data" / "embeddings" / "indicator_embeddings.parquet"
 SDMX_BASE_URL = "https://sdmx.data.unicef.org/ws/public/sdmxapi/rest"
 
-_COUNTRY_INDEX: Optional[Dict[str, str]] = None
+_DICTIONARY_DF: Optional[pd.DataFrame] = None
+_COUNTRY_KEYS: Optional[List[str]] = None   # unique lowercase country values
 _EMBEDDINGS_DF: Optional[pd.DataFrame] = None
 _EMBEDDINGS_MATRIX: Optional[np.ndarray] = None
 # Accumulates every DataFrame fetched during one agent run
@@ -83,32 +85,32 @@ def mark_new_question() -> None:
     _pending_reset = True
 
 
-def _load_index() -> Dict[str, str]:
-    global _COUNTRY_INDEX
-    if _COUNTRY_INDEX is None:
-        with open(PARTITIONS_DIR / "_index.json") as f:
-            _COUNTRY_INDEX = json.load(f)
-    return _COUNTRY_INDEX
+def _load_dictionary() -> pd.DataFrame:
+    global _DICTIONARY_DF, _COUNTRY_KEYS
+    if _DICTIONARY_DF is None:
+        _DICTIONARY_DF = pd.read_parquet(DICTIONARY_FILE)
+        _COUNTRY_KEYS = sorted(_DICTIONARY_DF["country"].dropna().unique().tolist())
+    return _DICTIONARY_DF
 
 
 def _resolve_country(name: str) -> Optional[str]:
-    """Return the canonical index key for a user-supplied country name, or None."""
-    index = _load_index()
+    """Return the canonical country key for a user-supplied name, or None."""
+    _load_dictionary()
+    keys = _COUNTRY_KEYS
     normalised = name.lower().strip()
 
     # 1. Exact match
-    if normalised in index:
+    if normalised in keys:
         return normalised
 
-    # 2. Substring match (e.g. "cambodia" in "cambodia")
-    for key in index:
+    # 2. Substring match — "cambodia" in "cambodia", "drc" in "democratic republic..."
+    for key in keys:
         if normalised in key or key in normalised:
             return key
 
-    # 3. Token-prefix match — handles "Laos" → "lao people's democratic republic",
-    #    "DRC" → "democratic republic of the congo", etc.
+    # 3. Token-prefix match — "Laos" → "lao people's democratic republic"
     query_tokens = [t for t in normalised.split() if len(t) >= 3]
-    for key in index:
+    for key in keys:
         key_tokens = [t for t in key.split() if len(t) >= 3]
         for qt in query_tokens:
             for kt in key_tokens:
@@ -116,11 +118,6 @@ def _resolve_country(name: str) -> Optional[str]:
                     return key
 
     return None
-
-
-def _load_partition(country_key: str) -> pd.DataFrame:
-    index = _load_index()
-    return pd.read_parquet(PARTITIONS_DIR / index[country_key])
 
 
 def _load_embeddings() -> Tuple[pd.DataFrame, np.ndarray]:
@@ -177,8 +174,10 @@ def _embed_query(query: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> str:
-    """Search country partition files for indicators matching the query using semantic search."""
+    """Search the data dictionary for indicators matching the query using semantic search."""
     top_k = min(top_k, 20)
+
+    full_df = _load_dictionary()
 
     found: List[str] = []
     missing: List[str] = []
@@ -190,15 +189,14 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
             missing.append(name)
             continue
         found.append(key)
-        df = _load_partition(key).copy()
-        df["_country_key"] = key
-        frames.append(df)
+        subset = full_df[full_df["country"] == key].copy()
+        subset["_country_key"] = key
+        frames.append(subset)
 
     lines: List[str] = []
     if missing:
-        lines.append(f"Countries not found in partitions: {missing}")
-        index = _load_index()
-        suggestions = [k for k in index if any(m.lower()[:4] in k for m in missing)][:5]
+        lines.append(f"Countries not found in dictionary: {missing}")
+        suggestions = [k for k in _COUNTRY_KEYS if any(m.lower()[:4] in k for m in missing)][:5]
         if suggestions:
             lines.append(f"  Did you mean one of: {suggestions}?")
 

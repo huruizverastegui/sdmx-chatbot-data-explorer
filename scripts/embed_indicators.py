@@ -8,7 +8,6 @@ Run with:
   conda run -n genai_vector python scripts/embed_indicators.py
 """
 
-import json
 import os
 import time
 from pathlib import Path
@@ -20,8 +19,9 @@ from openai import AzureOpenAI
 
 load_dotenv()
 
-PARTITIONS_DIR = Path("data/partitions")
-OUTPUT_DIR = Path("data/embeddings")
+ROOT = Path(__file__).parent.parent
+DICTIONARY_FILE = ROOT / "data" / "data_dictionary.parquet"
+OUTPUT_DIR = ROOT / "data" / "embeddings"
 OUTPUT_FILE = OUTPUT_DIR / "indicator_embeddings.parquet"
 
 BATCH_SIZE = 100  # Azure OpenAI max is 2048; keep lower to avoid timeouts
@@ -48,19 +48,18 @@ def main() -> None:
     )
     deployment = os.environ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"]
 
-    # Collect unique indicators across all partitions
-    with open(PARTITIONS_DIR / "_index.json") as f:
-        index = json.load(f)
-
-    frames = []
-    for fname in index.values():
-        df = pd.read_parquet(
-            PARTITIONS_DIR / fname,
-            columns=["indicator_id", "indicator", "definition", "category"],
+    if not DICTIONARY_FILE.exists():
+        raise FileNotFoundError(
+            f"data_dictionary.parquet not found: {DICTIONARY_FILE}\n"
+            "Run: python scripts/partition_by_country.py --convert"
         )
-        frames.append(df)
 
-    all_df = pd.concat(frames, ignore_index=True)
+    print(f"Reading {DICTIONARY_FILE} ...")
+    all_df = pd.read_parquet(
+        DICTIONARY_FILE,
+        columns=["indicator_id", "indicator", "definition", "category"],
+    )
+
     unique = (
         all_df.drop_duplicates("indicator_id")[
             ["indicator_id", "indicator", "definition", "category"]
