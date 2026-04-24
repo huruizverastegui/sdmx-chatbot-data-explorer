@@ -428,12 +428,16 @@ def _parse_options(question: str) -> list:
 # ---------------------------------------------------------------------------
 
 def _attach_chart_to_last_message() -> None:
-    """Store current chart data inside the last assistant chat_history entry."""
-    spec = get_viz_spec()
+    """Store current data (and optional chart spec) inside the last assistant message."""
     dfs = get_fetched_dfs()
-    if not spec or not dfs:
+    if not dfs:
         return
-    chart_data = {"spec": spec, "dfs": dfs, "urls": get_source_urls(), "fetch_log": list(get_fetch_log())}
+    chart_data = {
+        "spec": get_viz_spec(),   # may be None — data still shown without a chart
+        "dfs": dfs,
+        "urls": get_source_urls(),
+        "fetch_log": list(get_fetch_log()),
+    }
     for msg in reversed(st.session_state.chat_history):
         if msg["role"] == "assistant":
             msg["chart"] = chart_data
@@ -441,8 +445,9 @@ def _attach_chart_to_last_message() -> None:
 
 
 def _render_chart_block(chart: dict, key: str) -> None:
-    """Render chart + download button + source expander from a stored chart dict."""
-    _render_chart(chart["dfs"], chart["spec"])
+    """Render chart (if spec present), download button, source expander, and debug log."""
+    if chart.get("spec"):
+        _render_chart(chart["dfs"], chart["spec"])
     combined_csv = pd.concat(chart["dfs"], ignore_index=True)
     st.download_button(
         label="Download data (CSV)",

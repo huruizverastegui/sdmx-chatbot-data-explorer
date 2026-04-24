@@ -57,7 +57,7 @@ class AgentSession:
     viz_spec:          Optional[Dict]                  = None
     pending_reset:     bool                            = False
     dataflow_cache:    Dict[Tuple, List[Tuple]]        = field(default_factory=dict)
-    unicef_fallbacks:  Dict[str, List[Tuple]]          = field(default_factory=dict)
+    unicef_fallbacks:  Dict[Tuple, List[Tuple]]         = field(default_factory=dict)
     dataflow_failures: Dict[str, int]                  = field(default_factory=dict)
     current_query_vec: Optional[np.ndarray]            = None  # embedding of last search query
     fetch_log:         List[Dict]                      = field(default_factory=list)
@@ -375,12 +375,13 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
         if unicef_flows:
             for data in country_map.values():
                 iso_id = data["iso_id"]
-                if iso_id not in s.unicef_fallbacks:
-                    s.unicef_fallbacks[iso_id] = []
-                seen = {(ag, df_id) for ag, df_id, _ in s.unicef_fallbacks[iso_id]}
+                key = (primary_id, iso_id)
+                if key not in s.unicef_fallbacks:
+                    s.unicef_fallbacks[key] = []
+                seen = {(ag, df_id) for ag, df_id, _ in s.unicef_fallbacks[key]}
                 for ag, df_id, ind in unicef_flows:
                     if (ag, df_id) not in seen:
-                        s.unicef_fallbacks[iso_id].append((ag, df_id, ind))
+                        s.unicef_fallbacks[key].append((ag, df_id, ind))
                         seen.add((ag, df_id))
 
         # Populate the dataflow cache keyed by (primary_id, iso_id)
@@ -547,11 +548,10 @@ def query_sdmx_api(
     indicator_id: str,
     geography_id: str,
     geography_name: str,
-    start_period: str = "2015",
-    end_period: str = "2023",
+    start_period: str = "2000",
 ) -> str:
     """Try all cached dataflows for this indicator, rank by quality, return the best."""
-    qs = f"?format=csv&labels=both&startPeriod={start_period}&endPeriod={end_period}"
+    qs = f"?format=csv&labels=both&startPeriod={start_period}"
 
     # Use all known dataflows from the search cache; fall back to what the model passed.
     # Cache values are 4-tuples: (agency, dataflow_id, geo_id, actual_indicator_id).
@@ -605,7 +605,7 @@ def query_sdmx_api(
 
     # Always try UNICEF fallback flows — even when primary candidates returned data.
     # A fallback flow may cover more recent years and score higher.
-    fallbacks = s.unicef_fallbacks.get(geography_id, [])
+    fallbacks = s.unicef_fallbacks.get((indicator_id, geography_id), [])
     primary_keys = {(ag, df_id) for ag, df_id, *_ in candidates}
     for ag, df_id, actual_ind_id in fallbacks:
         if (ag, df_id) in primary_keys:
@@ -943,8 +943,7 @@ TOOLS = [
                     "indicator_id":   {"type": "string", "description": "Indicator ID, e.g. 'CME_MRY0T4'."},
                     "geography_id":   {"type": "string", "description": "Geographic area code, e.g. 'KHM'."},
                     "geography_name": {"type": "string", "description": "Human-readable geography name, e.g. 'Cambodia'."},
-                    "start_period":   {"type": "string", "description": "Start year, default '2015'."},
-                    "end_period":     {"type": "string", "description": "End year, default '2023'."},
+                    "start_period":   {"type": "string", "description": "Start year, default '2000'. No end period — always fetches up to the latest available data."},
                 },
                 "required": ["agency", "dataflow_id", "indicator_id", "geography_id", "geography_name"],
             },
