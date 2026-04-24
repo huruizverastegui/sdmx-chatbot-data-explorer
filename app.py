@@ -24,6 +24,26 @@ load_dotenv()
 
 st.set_page_config(page_title="UNICEF SDMX Explorer", page_icon="🌍", layout="centered")
 
+# ---------------------------------------------------------------------------
+# Startup config validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_ENV = [
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_LLM_DEPLOYMENT",
+    "AZURE_OPENAI_LLM_API_VERSION",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+    "AZURE_OPENAI_EMBEDDING_API_VERSION",
+]
+_missing = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
+if _missing:
+    st.error(
+        f"Missing required environment variables: {', '.join(_missing)}\n\n"
+        "Set them in Azure App Service → Settings → Environment variables."
+    )
+    st.stop()
+
 
 # ---------------------------------------------------------------------------
 # Password gate
@@ -78,12 +98,23 @@ def run_agent_until_pause(agent_messages: list) -> dict:
     deployment = os.environ["AZURE_OPENAI_LLM_DEPLOYMENT"]
 
     while True:
-        response = client.chat.completions.create(
-            model=deployment,
-            messages=agent_messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
+        try:
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=agent_messages,
+                tools=TOOLS,
+                tool_choice="auto",
+            )
+        except Exception as e:
+            endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "not set")
+            api_version = os.environ.get("AZURE_OPENAI_LLM_API_VERSION", "not set")
+            st.error(
+                f"Azure OpenAI error: {e}\n\n"
+                f"**Endpoint:** `{endpoint}`  \n"
+                f"**Deployment:** `{deployment}`  \n"
+                f"**API version:** `{api_version}`"
+            )
+            st.stop()
         msg = response.choices[0].message
         agent_messages.append(msg)
 
