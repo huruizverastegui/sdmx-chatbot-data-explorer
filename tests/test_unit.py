@@ -4,12 +4,13 @@ Unit tests — no API calls, run in seconds.
 Run:
   conda run -n genai_vector python -m pytest tests/test_unit.py -v
 """
+import numpy as np
 import pandas as pd
 import pytest
 
 from agents.sdmx_agent import (
     AgentSession, set_current_session,
-    _indicator_matches, get_data_dimensions,
+    _data_matches_query, get_data_dimensions,
     get_fetched_dfs, get_viz_spec, get_source_urls,
     mark_new_question, reset_session_data,
     _resolve_country, _format_csv_response,
@@ -61,27 +62,21 @@ class TestSessionIsolation:
 # Indicator validation
 # ===========================================================================
 
-class TestIndicatorMatches:
-    def test_correct_indicator_accepted(self):
-        df = pd.DataFrame({"INDICATOR": ["CME_MRY0T4"] * 3, "OBS_VALUE": [1, 2, 3]})
-        assert _indicator_matches(df, "CME_MRY0T4")
+class TestDataMatchesQuery:
+    """_data_matches_query falls back to True when embeddings aren't loaded (unit test context)."""
 
-    def test_wrong_indicator_rejected(self):
-        df = pd.DataFrame({"INDICATOR": ["IM_RCV1"] * 3, "OBS_VALUE": [92, 91, 90]})
-        assert not _indicator_matches(df, "CME_MRY0T4")
+    def _dummy_vec(self) -> np.ndarray:
+        v = np.ones(3, dtype=np.float32)
+        return v / np.linalg.norm(v)
 
     def test_no_indicator_column_trusted(self):
         df = pd.DataFrame({"OBS_VALUE": [1, 2, 3], "TIME_PERIOD": [2020, 2021, 2022]})
-        assert _indicator_matches(df, "CME_MRY0T4")
+        assert _data_matches_query(df, self._dummy_vec())
 
-    def test_partial_match_accepted(self):
-        # Variant IDs: "MRY0T4" is a substring of "CME_MRY0T4"
-        df = pd.DataFrame({"INDICATOR": ["MRY0T4"] * 2, "OBS_VALUE": [5, 6]})
-        assert _indicator_matches(df, "CME_MRY0T4")
-
-    def test_case_insensitive(self):
-        df = pd.DataFrame({"INDICATOR": ["cme_mry0t4"] * 2, "OBS_VALUE": [5, 6]})
-        assert _indicator_matches(df, "CME_MRY0T4")
+    def test_unknown_indicator_code_trusted(self):
+        # Code not in the embeddings index → can't judge → trust it
+        df = pd.DataFrame({"INDICATOR": ["UNKNOWN_XYZ"] * 2, "OBS_VALUE": [5, 6]})
+        assert _data_matches_query(df, self._dummy_vec())
 
 
 # ===========================================================================

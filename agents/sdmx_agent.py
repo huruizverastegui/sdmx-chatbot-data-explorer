@@ -41,6 +41,8 @@ _DICTIONARY_DF: Optional[pd.DataFrame] = None
 _COUNTRY_KEYS: Optional[List[str]] = None
 _EMBEDDINGS_DF: Optional[pd.DataFrame] = None
 _EMBEDDINGS_MATRIX: Optional[np.ndarray] = None
+_INDICATOR_ID_INDEX: Optional[Dict[str, int]] = None  # indicator_id.upper() → row index
+_NAME_EMBED_CACHE: Dict[str, np.ndarray] = {}          # indicator name text → embedding
 
 CIRCUIT_OPEN_THRESHOLD = 3
 
@@ -57,6 +59,8 @@ class AgentSession:
     dataflow_cache:    Dict[Tuple, List[Tuple]]        = field(default_factory=dict)
     unicef_fallbacks:  Dict[str, List[Tuple]]          = field(default_factory=dict)
     dataflow_failures: Dict[str, int]                  = field(default_factory=dict)
+    current_query_vec: Optional[np.ndarray]            = None  # embedding of last search query
+    fetch_log:         List[Dict]                      = field(default_factory=list)
 
 
 _current_session: ContextVar[AgentSession] = ContextVar("agent_session")
@@ -85,6 +89,10 @@ def get_source_urls() -> List[Dict]:
 
 def get_viz_spec() -> Optional[Dict]:
     return _get_session().viz_spec
+
+
+def get_fetch_log() -> List[Dict]:
+    return _get_session().fetch_log
 
 
 def reset_session_data() -> None:
@@ -138,7 +146,7 @@ def _resolve_country(name: str) -> Optional[str]:
 
 
 def _load_embeddings() -> Tuple[pd.DataFrame, np.ndarray]:
-    global _EMBEDDINGS_DF, _EMBEDDINGS_MATRIX
+    global _EMBEDDINGS_DF, _EMBEDDINGS_MATRIX, _INDICATOR_ID_INDEX
     if _EMBEDDINGS_DF is None:
         df = pd.read_parquet(EMBEDDINGS_FILE)
         matrix = np.array(df["embedding"].tolist(), dtype=np.float32)
@@ -146,6 +154,10 @@ def _load_embeddings() -> Tuple[pd.DataFrame, np.ndarray]:
         norms[norms == 0] = 1
         _EMBEDDINGS_MATRIX = matrix / norms
         _EMBEDDINGS_DF = df.reset_index(drop=True)
+        _INDICATOR_ID_INDEX = {
+            str(_EMBEDDINGS_DF.at[i, "indicator_id"]).upper(): i
+            for i in range(len(_EMBEDDINGS_DF))
+        }
     return _EMBEDDINGS_DF, _EMBEDDINGS_MATRIX
 
 
@@ -234,6 +246,7 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
     # Semantic search: embed query, score against pre-computed indicator embeddings
     emb_df, emb_matrix = _load_embeddings()
     query_vec = _embed_query(query)
+    s.current_query_vec = query_vec  # stored for response validation in query_sdmx_api
     similarities = emb_matrix @ query_vec  # cosine similarity (vectors are pre-normalised)
 
     # Get top-k indicator_ids by similarity that exist in the loaded partitions.
@@ -459,24 +472,41 @@ def _dataflow_quality_score(df: pd.DataFrame) -> float:
     return score
 
 
-def _indicator_matches(df: pd.DataFrame, expected_id: str) -> bool:
+_QUERY_MATCH_THRESHOLD = 0.40  # same floor used when ranking search results
+
+# With labels=both, SDMX returns a label column alongside each code column.
+_INDICATOR_LABEL_COLS = ("Indicator", "Series", "indicator_name", "INDICATOR_LABEL")
+
+
+def _data_matches_query(df: pd.DataFrame, query_vec: np.ndarray) -> bool:
     """
-    Return True if the fetched data actually contains the requested indicator.
-    Checks any INDICATOR-like column; if none exists, trusts the URL (returns True).
-    Prevents fallback flows from silently returning data for a different indicator.
+    Return True if at least one indicator in the fetched data is semantically
+    close to the original search query.
+
+    Reads the full indicator name from the SDMX label column (e.g. 'Indicator'),
+    embeds it via the Azure OpenAI embeddings API (with a module-level cache to
+    avoid duplicate calls), then computes cosine similarity against the stored
+    query vector.  Falls back to True when no label column is present.
     """
-    expected = expected_id.upper()
-    for col in ("INDICATOR", "Indicator", "indicator_id", "SERIES"):
-        if col not in df.columns:
-            continue
-        values = df[col].dropna().astype(str).str.upper().unique()
-        # Accept if the expected ID is a prefix of any returned value or vice versa
-        # (handles variant IDs like "CME_MRY0T4" vs "MRY0T4")
-        if any(expected in v or v in expected for v in values):
+    name_col = next((c for c in _INDICATOR_LABEL_COLS if c in df.columns), None)
+    if name_col is None:
+        return True  # no label column in this dataflow — trust it
+
+    names = [
+        n for n in df[name_col].dropna().astype(str).unique()
+        if n.strip() and n.lower() not in ("nan", "none", "")
+    ]
+    if not names:
+        return True  # empty label column — trust it
+
+    for name in names:
+        if name not in _NAME_EMBED_CACHE:
+            _NAME_EMBED_CACHE[name] = _embed_query(name)
+        sim = float(_NAME_EMBED_CACHE[name] @ query_vec)
+        if sim >= _QUERY_MATCH_THRESHOLD:
             return True
-        # Column exists but no match — this is a different indicator
-        return False
-    return True  # no indicator column to check; trust the URL
+
+    return False
 
 
 def _fetch_dataflow(
@@ -542,44 +572,72 @@ def query_sdmx_api(
 
     results: List[Tuple[float, pd.DataFrame, str, str, str]] = []  # score, df, url, ag, df_id
 
+    def _log(entry: dict) -> None:
+        entry.setdefault("indicator_id", indicator_id)
+        entry.setdefault("geography_id", geography_id)
+        s.fetch_log.append(entry)
+
     for ag, df_id, geo, actual_ind_id in candidates:
         flow_key = f"{ag}/{df_id}"
         if s.dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
-            continue  # circuit open — skip until next session reset
+            _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "skipped (circuit open)"})
+            continue
         outcome = _fetch_dataflow(ag, df_id, actual_ind_id, geo, geography_name, qs)
         if outcome is not None:
             df, url = outcome
-            if not _indicator_matches(df, indicator_id):
-                continue  # data is for a different indicator — reject silently
+            if s.current_query_vec is not None and not _data_matches_query(df, s.current_query_vec):
+                _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "rejected (query mismatch)"})
+                continue
             s.dataflow_failures[flow_key] = 0
             score = _dataflow_quality_score(df)
+            time_col = next((c for c in ("TIME_PERIOD", "Year", "YEAR") if c in df.columns), None)
+            years = sorted(pd.to_numeric(df[time_col], errors="coerce").dropna().unique().tolist()) if time_col else []
+            _log({
+                "flow": flow_key, "actual_id": actual_ind_id, "status": "accepted",
+                "score": round(score, 3), "rows": len(df),
+                "years": f"{int(years[0])}–{int(years[-1])}" if years else "?",
+                "url": url,
+            })
             results.append((score, df, url, ag, df_id))
         else:
             s.dataflow_failures[flow_key] = s.dataflow_failures.get(flow_key, 0) + 1
+            _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "no data (404/empty)"})
 
-    if not results:
-        # Last resort: try UNICEF fallback flows registered during search for this geography
-        fallbacks = s.unicef_fallbacks.get(geography_id, [])
-        primary_keys = {(ag, df_id) for ag, df_id, *_ in candidates}
-        for ag, df_id, actual_ind_id in fallbacks:
-            if (ag, df_id) in primary_keys:
-                continue  # already tried
-            flow_key = f"{ag}/{df_id}"
-            if s.dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
+    # Always try UNICEF fallback flows — even when primary candidates returned data.
+    # A fallback flow may cover more recent years and score higher.
+    fallbacks = s.unicef_fallbacks.get(geography_id, [])
+    primary_keys = {(ag, df_id) for ag, df_id, *_ in candidates}
+    for ag, df_id, actual_ind_id in fallbacks:
+        if (ag, df_id) in primary_keys:
+            continue  # already tried
+        flow_key = f"{ag}/{df_id}"
+        if s.dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
+            _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "skipped (circuit open)", "source": "fallback"})
+            continue
+        outcome = _fetch_dataflow(ag, df_id, actual_ind_id, geography_id, geography_name, qs)
+        if outcome is not None:
+            df, url = outcome
+            if s.current_query_vec is not None and not _data_matches_query(df, s.current_query_vec):
+                _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "rejected (query mismatch)", "source": "fallback"})
                 continue
-            outcome = _fetch_dataflow(ag, df_id, actual_ind_id, geography_id, geography_name, qs)
-            if outcome is not None:
-                df, url = outcome
-                if not _indicator_matches(df, indicator_id):
-                    continue  # fallback returned data for a wrong indicator — reject
-                s.dataflow_failures[flow_key] = 0
-                score = _dataflow_quality_score(df)
-                results.append((score, df, url, ag, df_id))
-            else:
-                s.dataflow_failures[flow_key] = s.dataflow_failures.get(flow_key, 0) + 1
+            s.dataflow_failures[flow_key] = 0
+            score = _dataflow_quality_score(df)
+            time_col = next((c for c in ("TIME_PERIOD", "Year", "YEAR") if c in df.columns), None)
+            years = sorted(pd.to_numeric(df[time_col], errors="coerce").dropna().unique().tolist()) if time_col else []
+            _log({
+                "flow": flow_key, "actual_id": actual_ind_id, "status": "accepted",
+                "score": round(score, 3), "rows": len(df),
+                "years": f"{int(years[0])}–{int(years[-1])}" if years else "?",
+                "url": url, "source": "fallback",
+            })
+            results.append((score, df, url, ag, df_id))
+        else:
+            s.dataflow_failures[flow_key] = s.dataflow_failures.get(flow_key, 0) + 1
+            _log({"flow": flow_key, "actual_id": actual_ind_id, "status": "no data (404/empty)", "source": "fallback"})
 
     if not results:
         tried = ", ".join(f"{ag}/{df_id}(geo={geo},ind={ind})" for ag, df_id, geo, ind in candidates)
+        _log({"status": "no results", "tried": tried})
         return (
             f"No data found for indicator={indicator_id}, geography={geography_id}. "
             f"Tried {len(candidates)} dataflow(s): {tried}."
@@ -587,6 +645,7 @@ def query_sdmx_api(
 
     results.sort(key=lambda x: x[0], reverse=True)
     best_score, best_df, best_url, best_ag, best_df_id = results[0]
+    _log({"status": "SELECTED", "flow": f"{best_ag}/{best_df_id}", "score": round(best_score, 3)})
 
     summary_lines = [
         f"Found data in {len(results)} dataflow(s). "

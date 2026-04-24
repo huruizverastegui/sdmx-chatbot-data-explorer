@@ -18,7 +18,8 @@ from openai import AzureOpenAI
 from agents.sdmx_agent import (
     SYSTEM_PROMPT, TOOLS, _TOOL_MAP,
     AgentSession, set_current_session,
-    get_fetched_dfs, get_source_urls, get_viz_spec, reset_session_data, mark_new_question,
+    get_fetched_dfs, get_source_urls, get_viz_spec, get_fetch_log,
+    reset_session_data, mark_new_question,
 )
 
 load_dotenv()
@@ -419,7 +420,7 @@ def _attach_chart_to_last_message() -> None:
     dfs = get_fetched_dfs()
     if not spec or not dfs:
         return
-    chart_data = {"spec": spec, "dfs": dfs, "urls": get_source_urls()}
+    chart_data = {"spec": spec, "dfs": dfs, "urls": get_source_urls(), "fetch_log": list(get_fetch_log())}
     for msg in reversed(st.session_state.chat_history):
         if msg["role"] == "assistant":
             msg["chart"] = chart_data
@@ -443,6 +444,22 @@ def _render_chart_block(chart: dict, key: str) -> None:
                 label = f"{entry['geography_id']} — {entry['indicator_id']}"
                 source_line = f"  \n*Source: {entry['data_source']}*" if entry.get("data_source") else ""
                 st.markdown(f"**{label}**{source_line}  \n{entry['url']}")
+    if chart.get("fetch_log") and os.environ.get("DEBUG") == "1":
+        with st.expander("🔍 Dataflow selection log"):
+            rows = []
+            for entry in chart["fetch_log"]:
+                rows.append({
+                    "Indicator": entry.get("indicator_id", ""),
+                    "Geography": entry.get("geography_id", ""),
+                    "Dataflow": entry.get("flow", ""),
+                    "Code used": entry.get("actual_id", ""),
+                    "Status": entry.get("status", ""),
+                    "Score": entry.get("score", ""),
+                    "Years": entry.get("years", ""),
+                    "Rows": entry.get("rows", ""),
+                    "Source": entry.get("source", "primary"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
