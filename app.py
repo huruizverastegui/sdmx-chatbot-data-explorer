@@ -17,6 +17,7 @@ from openai import AzureOpenAI
 
 from agents.sdmx_agent import (
     SYSTEM_PROMPT, TOOLS, _TOOL_MAP,
+    AgentSession, set_current_session,
     get_fetched_dfs, get_source_urls, get_viz_spec, reset_session_data, mark_new_question,
 )
 
@@ -124,7 +125,15 @@ def run_agent_until_pause(agent_messages: list) -> dict:
         pause = None
         for tc in msg.tool_calls:
             fn_name = tc.function.name
-            fn_args = json.loads(tc.function.arguments)
+            try:
+                fn_args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError as e:
+                agent_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": f"Error: could not parse tool arguments — {e}. Please retry with valid JSON.",
+                })
+                continue
 
             if fn_name == "ask_user_to_select_indicator":
                 pause = {"tool_call_id": tc.id, "question": fn_args["question"]}
@@ -168,15 +177,21 @@ def _resolve_col(df: pd.DataFrame, requested: "str | None", fallbacks: list) -> 
     return None
 
 
+_GEO_COLS = {"Geographic area", "Reference Areas", "REF_AREA", "GEOGRAPHIC_AREA"}
+
+
 def _resolve_duplicates(
     df: pd.DataFrame, x: str, y: str, color: "str | None"
 ) -> "tuple[pd.DataFrame, list[str]]":
     """
-    If multiple rows exist per (x, color_by) group, find disaggregation columns that have
-    a 'Total' / '_T' value and filter to them. Returns the filtered DataFrame and a list
-    of filters applied so the UI can show the user what was done.
+    If multiple rows exist per (x, color_by, geography) group, find disaggregation columns
+    that have a 'Total' / '_T' value and filter to them. Geography columns are always included
+    in the groupby so multi-country data is never mistaken for duplicates.
     """
-    group_cols = [c for c in [x, color] if c and c in df.columns]
+    geo_cols = [c for c in _GEO_COLS if c in df.columns]
+    group_cols = list(dict.fromkeys(             # ordered, deduplicated
+        [c for c in [x, color] if c and c in df.columns] + geo_cols
+    ))
     applied: list = []
 
     if not group_cols or df.groupby(group_cols)[y].count().max() <= 1:
@@ -185,7 +200,7 @@ def _resolve_duplicates(
     result = df.copy()
     candidate_cols = [
         c for c in df.columns
-        if c not in _NON_DISAGG_COLS and c not in group_cols and c != y
+        if c not in _NON_DISAGG_COLS and c not in set(group_cols) and c != y
     ]
 
     for col in candidate_cols:
@@ -206,16 +221,20 @@ def _render_chart(dfs: list, spec: dict) -> None:
 
     combined = pd.concat(dfs, ignore_index=True)
 
-    # Apply filters specified by the LLM
+    x = spec["x_column"]
+    y = spec["y_column"]
+    color = spec.get("color_by")
+
+    # Apply filters specified by the LLM, but never filter on the color_by column
+    # (that would collapse the breakdown the user asked for)
+    color_lower = color.lower() if color else ""
     for col, val in spec.get("filters", {}).items():
+        if col.lower() == color_lower:
+            continue  # skip — this column is the breakdown dimension
         if col in combined.columns:
             filtered = combined[combined[col] == val]
             if not filtered.empty:
                 combined = filtered
-
-    x = spec["x_column"]
-    y = spec["y_column"]
-    color = spec.get("color_by")
     title = spec.get("title", "")
     chart_type = spec.get("chart_type", "line")
 
@@ -370,6 +389,7 @@ def _init_state() -> None:
         "selection_question": "",
         "pending_tool_call_id": None,
         "session_ctx": {},
+        "agent_session": AgentSession(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -377,6 +397,7 @@ def _init_state() -> None:
 
 
 _init_state()
+set_current_session(st.session_state.agent_session)
 
 
 # ---------------------------------------------------------------------------

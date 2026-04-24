@@ -10,6 +10,8 @@ Pipeline:
 import json  # used for tool call argument parsing
 import os
 import re
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -31,58 +33,73 @@ DICTIONARY_FILE = ROOT / "data" / "data_dictionary.parquet"
 EMBEDDINGS_FILE = ROOT / "data" / "embeddings" / "indicator_embeddings.parquet"
 SDMX_BASE_URL = "https://sdmx.data.unicef.org/ws/public/sdmxapi/rest"
 
+# ---------------------------------------------------------------------------
+# Read-only shared caches (safe to share across users)
+# ---------------------------------------------------------------------------
+
 _DICTIONARY_DF: Optional[pd.DataFrame] = None
-_COUNTRY_KEYS: Optional[List[str]] = None   # unique lowercase country values
+_COUNTRY_KEYS: Optional[List[str]] = None
 _EMBEDDINGS_DF: Optional[pd.DataFrame] = None
 _EMBEDDINGS_MATRIX: Optional[np.ndarray] = None
-# Accumulates every DataFrame fetched during one agent run
-_fetched_dfs: List[pd.DataFrame] = []
-_source_urls: List[Dict] = []   # {geography_name, indicator_id, url} per fetch
-_viz_spec: Optional[Dict] = None
-_pending_reset: bool = False  # lazy reset — cleared on first API call of a new question
 
-# Cache populated by search_data_dictionary: (indicator_id, geography_id) → [(agency, dataflow_id, geo_id, actual_indicator_id)]
-_dataflow_cache: Dict[Tuple[str, str], List[Tuple]] = {}
-# UNICEF fallback flows per geography, built across all concepts during search.
-# Used as last resort when all primary cache candidates fail.
-# geo_id → [(agency, dataflow_id, actual_indicator_id)]
-_unicef_fallbacks: Dict[str, List[Tuple[str, str, str]]] = {}
-# Circuit breaker: counts consecutive failures per "agency/dataflow_id".
-# Dataflows that reach CIRCUIT_OPEN_THRESHOLD are skipped for the session.
-# Resets on session reset so a dataflow that recovers is retried next session.
-_dataflow_failures: Dict[str, int] = {}
 CIRCUIT_OPEN_THRESHOLD = 3
+
+# ---------------------------------------------------------------------------
+# Per-user mutable state — stored in AgentSession, scoped via ContextVar
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AgentSession:
+    fetched_dfs:       List[pd.DataFrame]              = field(default_factory=list)
+    source_urls:       List[Dict]                      = field(default_factory=list)
+    viz_spec:          Optional[Dict]                  = None
+    pending_reset:     bool                            = False
+    dataflow_cache:    Dict[Tuple, List[Tuple]]        = field(default_factory=dict)
+    unicef_fallbacks:  Dict[str, List[Tuple]]          = field(default_factory=dict)
+    dataflow_failures: Dict[str, int]                  = field(default_factory=dict)
+
+
+_current_session: ContextVar[AgentSession] = ContextVar("agent_session")
+_fallback_session: AgentSession = AgentSession()   # used in CLI / test contexts
+
+
+def _get_session() -> AgentSession:
+    try:
+        return _current_session.get()
+    except LookupError:
+        return _fallback_session
+
+
+def set_current_session(session: AgentSession) -> None:
+    """Call once per Streamlit script run to bind this user's session."""
+    _current_session.set(session)
 
 
 def get_fetched_dfs() -> List[pd.DataFrame]:
-    return _fetched_dfs
+    return _get_session().fetched_dfs
 
 
 def get_source_urls() -> List[Dict]:
-    return _source_urls
+    return _get_session().source_urls
 
 
 def get_viz_spec() -> Optional[Dict]:
-    return _viz_spec
+    return _get_session().viz_spec
 
 
 def reset_session_data() -> None:
-    global _fetched_dfs, _source_urls, _viz_spec, _pending_reset, _unicef_fallbacks, _dataflow_failures
-    _fetched_dfs = []
-    _source_urls = []
-    _viz_spec = None
-    _pending_reset = False
-    _unicef_fallbacks = {}
-    _dataflow_failures = {}
+    s = _get_session()
+    s.fetched_dfs = []
+    s.source_urls = []
+    s.viz_spec = None
+    s.pending_reset = False
+    s.unicef_fallbacks = {}
+    s.dataflow_failures = {}
 
 
 def mark_new_question() -> None:
-    """Signal that a new question was submitted without clearing data yet.
-    Data is cleared lazily on the first query_sdmx_api call so that follow-up
-    questions that don't fetch new data leave the existing chart visible.
-    """
-    global _pending_reset
-    _pending_reset = True
+    """Signal that a new question was submitted without clearing data yet."""
+    _get_session().pending_reset = True
 
 
 def _load_dictionary() -> pd.DataFrame:
@@ -176,6 +193,13 @@ def _embed_query(query: str) -> np.ndarray:
 def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> str:
     """Search the data dictionary for indicators matching the query using semantic search."""
     top_k = min(top_k, 20)
+
+    # Each search starts a fresh data-fetch pipeline — stale flows from a previous
+    # question's search must not bleed into this one via the fallback mechanism.
+    s = _get_session()
+    s.dataflow_cache = {}
+    s.unicef_fallbacks = {}
+    s.dataflow_failures = {}
 
     full_df = _load_dictionary()
 
@@ -322,8 +346,7 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
             # Also add countries missing entirely from partition but in requested list
             for country_key in found:
                 if country_key not in country_map:
-                    part = _load_partition(country_key)
-                    sample = part.head(1)
+                    sample = full_df[full_df["country"] == country_key].head(1)
                     if sample.empty:
                         continue
                     iso_id = _iso_geo_id(sample.iloc[0])
@@ -334,22 +357,22 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
                         "flows": flows,
                     }
 
-        # Register UNICEF flows globally (after country_map is fully built) so
+        # Register UNICEF flows in session (after country_map is fully built) so
         # query_sdmx_api can use them as last resort for any geography.
         if unicef_flows:
             for data in country_map.values():
                 iso_id = data["iso_id"]
-                if iso_id not in _unicef_fallbacks:
-                    _unicef_fallbacks[iso_id] = []
-                seen = {(ag, df_id) for ag, df_id, _ in _unicef_fallbacks[iso_id]}
+                if iso_id not in s.unicef_fallbacks:
+                    s.unicef_fallbacks[iso_id] = []
+                seen = {(ag, df_id) for ag, df_id, _ in s.unicef_fallbacks[iso_id]}
                 for ag, df_id, ind in unicef_flows:
                     if (ag, df_id) not in seen:
-                        _unicef_fallbacks[iso_id].append((ag, df_id, ind))
+                        s.unicef_fallbacks[iso_id].append((ag, df_id, ind))
                         seen.add((ag, df_id))
 
         # Populate the dataflow cache keyed by (primary_id, iso_id)
         for data in country_map.values():
-            _dataflow_cache[(primary_id, data["iso_id"])] = data["flows"]
+            s.dataflow_cache[(primary_id, data["iso_id"])] = data["flows"]
 
         available_countries = [
             {"country_key": ck, "geography_id": d["iso_id"], "display_name": d["display_name"]}
@@ -436,6 +459,26 @@ def _dataflow_quality_score(df: pd.DataFrame) -> float:
     return score
 
 
+def _indicator_matches(df: pd.DataFrame, expected_id: str) -> bool:
+    """
+    Return True if the fetched data actually contains the requested indicator.
+    Checks any INDICATOR-like column; if none exists, trusts the URL (returns True).
+    Prevents fallback flows from silently returning data for a different indicator.
+    """
+    expected = expected_id.upper()
+    for col in ("INDICATOR", "Indicator", "indicator_id", "SERIES"):
+        if col not in df.columns:
+            continue
+        values = df[col].dropna().astype(str).str.upper().unique()
+        # Accept if the expected ID is a prefix of any returned value or vice versa
+        # (handles variant IDs like "CME_MRY0T4" vs "MRY0T4")
+        if any(expected in v or v in expected for v in values):
+            return True
+        # Column exists but no match — this is a different indicator
+        return False
+    return True  # no indicator column to check; trust the URL
+
+
 def _fetch_dataflow(
     agency: str,
     dataflow_id: str,
@@ -484,8 +527,9 @@ def query_sdmx_api(
     # Cache values are 4-tuples: (agency, dataflow_id, geo_id, actual_indicator_id).
     # actual_indicator_id may differ from the queried indicator_id when variants of the
     # same concept use different IDs in different dataflow families (e.g. B12 vs IM_BCG).
+    s = _get_session()
     cache_key = (str(indicator_id), str(geography_id))
-    raw_candidates = _dataflow_cache.get(cache_key, [(agency, dataflow_id, geography_id, indicator_id)])
+    raw_candidates = s.dataflow_cache.get(cache_key, [(agency, dataflow_id, geography_id, indicator_id)])
 
     def _normalise(c: tuple) -> tuple:
         if len(c) == 4:
@@ -500,35 +544,39 @@ def query_sdmx_api(
 
     for ag, df_id, geo, actual_ind_id in candidates:
         flow_key = f"{ag}/{df_id}"
-        if _dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
+        if s.dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
             continue  # circuit open — skip until next session reset
         outcome = _fetch_dataflow(ag, df_id, actual_ind_id, geo, geography_name, qs)
         if outcome is not None:
-            _dataflow_failures[flow_key] = 0  # success — reset counter
             df, url = outcome
+            if not _indicator_matches(df, indicator_id):
+                continue  # data is for a different indicator — reject silently
+            s.dataflow_failures[flow_key] = 0
             score = _dataflow_quality_score(df)
             results.append((score, df, url, ag, df_id))
         else:
-            _dataflow_failures[flow_key] = _dataflow_failures.get(flow_key, 0) + 1
+            s.dataflow_failures[flow_key] = s.dataflow_failures.get(flow_key, 0) + 1
 
     if not results:
         # Last resort: try UNICEF fallback flows registered during search for this geography
-        fallbacks = _unicef_fallbacks.get(geography_id, [])
+        fallbacks = s.unicef_fallbacks.get(geography_id, [])
         primary_keys = {(ag, df_id) for ag, df_id, *_ in candidates}
         for ag, df_id, actual_ind_id in fallbacks:
             if (ag, df_id) in primary_keys:
                 continue  # already tried
             flow_key = f"{ag}/{df_id}"
-            if _dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
+            if s.dataflow_failures.get(flow_key, 0) >= CIRCUIT_OPEN_THRESHOLD:
                 continue
             outcome = _fetch_dataflow(ag, df_id, actual_ind_id, geography_id, geography_name, qs)
             if outcome is not None:
-                _dataflow_failures[flow_key] = 0
                 df, url = outcome
+                if not _indicator_matches(df, indicator_id):
+                    continue  # fallback returned data for a wrong indicator — reject
+                s.dataflow_failures[flow_key] = 0
                 score = _dataflow_quality_score(df)
                 results.append((score, df, url, ag, df_id))
             else:
-                _dataflow_failures[flow_key] = _dataflow_failures.get(flow_key, 0) + 1
+                s.dataflow_failures[flow_key] = s.dataflow_failures.get(flow_key, 0) + 1
 
     if not results:
         tried = ", ".join(f"{ag}/{df_id}(geo={geo},ind={ind})" for ag, df_id, geo, ind in candidates)
@@ -556,25 +604,24 @@ def query_sdmx_api(
 
 
 def _format_csv_response(df: pd.DataFrame, indicator_id: str, geography_id: str, url: str) -> str:
-    global _fetched_dfs, _source_urls, _viz_spec, _pending_reset
-    if _pending_reset:
-        _fetched_dfs = []
-        _source_urls = []
-        _viz_spec = None
-        _pending_reset = False
+    s = _get_session()
+    if s.pending_reset:
+        s.fetched_dfs = []
+        s.source_urls = []
+        s.viz_spec = None
+        s.pending_reset = False
 
     # Replace existing entry for this geography/indicator rather than appending
-    # (prevents duplicates when the agent retries or calls with different dataflows)
     existing_idx = next(
-        (i for i, s in enumerate(_source_urls)
-         if s["geography_id"] == geography_id and s["indicator_id"] == indicator_id),
+        (i for i, entry in enumerate(s.source_urls)
+         if entry["geography_id"] == geography_id and entry["indicator_id"] == indicator_id),
         None,
     )
     if existing_idx is not None:
-        _fetched_dfs[existing_idx] = df
-        _source_urls[existing_idx]["url"] = url
+        s.fetched_dfs[existing_idx] = df
+        s.source_urls[existing_idx]["url"] = url
     else:
-        _fetched_dfs.append(df)
+        s.fetched_dfs.append(df)
     # Extract data source label — column name varies by dataflow
     _DATA_SOURCE_COLS = ["DATA_SOURCE", "Short_Source", "SHORT_SOURCE", "CDDATASOURCE",
                          "PROVIDER", "Data Source", "Source"]
@@ -586,14 +633,14 @@ def _format_csv_response(df: pd.DataFrame, indicator_id: str, geography_id: str,
                 data_source = str(val)
                 break
     if existing_idx is None:
-        _source_urls.append({
+        s.source_urls.append({
             "geography_id":  geography_id,
             "indicator_id":  indicator_id,
             "url":           url,
             "data_source":   data_source,
         })
     else:
-        _source_urls[existing_idx]["data_source"] = data_source
+        s.source_urls[existing_idx]["data_source"] = data_source
 
     if df.empty:
         return f"API returned an empty CSV from {url}."
@@ -707,7 +754,50 @@ def run_quality_checks(
 
 
 # ---------------------------------------------------------------------------
-# Tool 5 – create visualization
+# Tool 5 – inspect available dimensions in fetched data
+# ---------------------------------------------------------------------------
+
+_NON_DISAGG_COLS = {
+    "TIME_PERIOD", "Year", "YEAR",
+    "OBS_VALUE", "LOWER_BOUND", "UPPER_BOUND", "OBS_STATUS", "Observation Status",
+    "REF_AREA", "Geographic area", "Reference Areas",
+    "INDICATOR", "Indicator",
+    "UNIT_MEASURE", "Unit of measure",
+    "DATA_SOURCE", "SHORT_SOURCE", "CDDATASOURCE", "PROVIDER",
+    "DEFINITION", "MDG_REGION", "REF_PERIOD", "COVERAGE_TIME",
+    "OBS_VALUE_CHARACTER", "OBS_CONF", "OBS_FOOTNOTE",
+    "COUNTRY_NOTES", "SERIES_FOOTNOTE", "SOURCE_LINK",
+}
+
+
+def get_data_dimensions() -> str:
+    """Return the breakdown dimensions available in the currently fetched data."""
+    s = _get_session()
+    if not s.fetched_dfs:
+        return "No data currently fetched — run query_sdmx_api first."
+
+    combined = pd.concat(s.fetched_dfs, ignore_index=True)
+    lines = [
+        f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s).\n"
+        "Available breakdown dimensions (columns with >1 unique value):"
+    ]
+    found = False
+    for col in combined.columns:
+        if col in _NON_DISAGG_COLS or col.startswith("_"):
+            continue
+        unique_vals = combined[col].dropna().unique()
+        if len(unique_vals) > 1:
+            found = True
+            vals_preview = sorted(str(v) for v in unique_vals)[:12]
+            suffix = f" … ({len(unique_vals)} total)" if len(unique_vals) > 12 else ""
+            lines.append(f"  {col}: {vals_preview}{suffix}")
+    if not found:
+        lines.append("  None — data has no additional breakdown dimensions.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Tool 6 – create visualization
 # ---------------------------------------------------------------------------
 
 def create_visualization(
@@ -719,8 +809,7 @@ def create_visualization(
     filters: Optional[Dict] = None,
 ) -> str:
     """Store a visualization spec; the UI will render it from all accumulated data."""
-    global _viz_spec
-    _viz_spec = {
+    _get_session().viz_spec = {
         "chart_type": chart_type,
         "x_column": x_column,
         "y_column": y_column,
@@ -850,6 +939,20 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_data_dimensions",
+            "description": (
+                "Return the breakdown dimensions available in the currently fetched data "
+                "(e.g. Sex, Age, Wealth quintile) along with their unique values. "
+                "Call this after fetching data to tell the user what follow-up breakdowns are possible, "
+                "and again when the user asks a follow-up question to confirm the column name before "
+                "calling create_visualization."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_quality_checks",
             "description": "Run quality checks on SDMX data: completeness, null rate, value plausibility. Returns PASS/PARTIAL/FAIL.",
             "parameters": {
@@ -870,6 +973,7 @@ _TOOL_MAP = {
     "search_data_dictionary": search_data_dictionary,
     "ask_user_to_select_indicator": ask_user_to_select_indicator,
     "query_sdmx_api": query_sdmx_api,
+    "get_data_dimensions": get_data_dimensions,
     "create_visualization": create_visualization,
     "run_quality_checks": run_quality_checks,
 }
@@ -880,7 +984,9 @@ _TOOL_MAP = {
 
 SYSTEM_PROMPT = (
     "You are a UNICEF data analyst assistant. "
-    "Answer the user's question by following these steps in order:\n"
+    "You have two modes depending on whether data has already been fetched.\n\n"
+
+    "═══ MODE A — New question (no data fetched yet, or user asks about a different indicator/country) ═══\n"
     "1. Call search_data_dictionary to retrieve the top matching indicators.\n"
     "   The results show, for each indicator, which countries it is available for "
     "   and which are NOT available.\n"
@@ -893,18 +999,30 @@ SYSTEM_PROMPT = (
     "   The tool automatically tests all available dataflows and returns the best data. "
     "   Note the exact column names in each response — you will need them for the chart.\n"
     "   If a country has no data, mention it clearly in your final answer.\n"
-    "4. Call create_visualization to specify the chart. "
-    "   First inspect the column names and unique values returned by query_sdmx_api, then apply these rules:\n"
+    "4. Call get_data_dimensions to discover what breakdown dimensions exist in the fetched data.\n"
+    "5. Call create_visualization to specify the chart. "
+    "   Apply these rules:\n"
     "   • Multiple countries, single indicator over time → line chart, color by geography column.\n"
-    "   • Single country, single indicator over time, one disaggregation of interest (e.g. Sex with 2–3 values) → line chart, color by that disaggregation.\n"
+    "   • Single country over time → line chart, filter all disaggregations to their total value.\n"
     "   • Comparison at a single point in time → bar chart, x = geography or category.\n"
-    "   • CRITICAL — avoid color_by on high-cardinality columns: if a column has more than 8 unique values (e.g. age groups, wealth quintiles), do NOT use it as color_by. Instead:\n"
+    "   • CRITICAL — avoid color_by on high-cardinality columns (>8 unique values). Instead:\n"
     "     - Use filters to pick the most relevant value (e.g. a specific age group or total).\n"
-    "     - Or use it as the x-axis in a bar chart to show distribution at the most recent time point (add a filter on TIME_PERIOD for the latest year).\n"
-    "   • Always filter out irrelevant disaggregations to total/aggregate values (e.g. SEX='_T', AGE='_T') unless the question specifically asks about breakdowns.\n"
-    "5. Call run_quality_checks for each dataset fetched.\n"
-    "6. Summarise the findings clearly, including key statistics and any quality concerns. "
-    "   If some countries had no data for the selected indicator, say so.\n"
+    "     - Or use it as the x-axis in a bar chart filtered to the latest time point.\n"
+    "   • Always filter out irrelevant disaggregations to their total/aggregate value "
+    "     (e.g. SEX='_T', AGE='_T') unless the user specifically asks for a breakdown.\n"
+    "6. Call run_quality_checks for each dataset fetched.\n"
+    "7. Summarise findings. End your answer with a 'Available breakdowns' section listing "
+    "   the dimensions from get_data_dimensions that the user could explore "
+    "   (e.g. '**Available breakdowns:** Sex, Age group, Wealth quintile — ask me to show any of these.').\n\n"
+
+    "═══ MODE B — Follow-up on already-fetched data (user asks about a breakdown or different view) ═══\n"
+    "Trigger: user asks to split/break down/show by a dimension (sex, age, wealth, residence, etc.) "
+    "WITHOUT mentioning a new indicator or country.\n"
+    "DO NOT call search_data_dictionary, ask_user_to_select_indicator, or query_sdmx_api.\n"
+    "1. Call get_data_dimensions to get the exact column names and values available.\n"
+    "2. Call create_visualization with the appropriate color_by or filters for the requested breakdown.\n"
+    "3. Summarise the new view and again list remaining available breakdowns.\n\n"
+
     "Always ask the user to choose an indicator — never pick one on their behalf."
 )
 
