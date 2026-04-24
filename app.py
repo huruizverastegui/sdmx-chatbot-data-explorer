@@ -236,8 +236,21 @@ def _render_chart(dfs: list, spec: dict) -> None:
             filtered = combined[combined[col] == val]
             if not filtered.empty:
                 combined = filtered
-    title = spec.get("title", "")
     chart_type = spec.get("chart_type", "line")
+
+    # Prefer the actual indicator name from the SDMX response over the LLM-generated title.
+    # With labels=both, the 'Indicator' column contains the canonical SDMX name.
+    indicator_label_col = next(
+        (c for c in ("Indicator", "indicator_name") if c in combined.columns), None
+    )
+    if indicator_label_col:
+        sdmx_names = [
+            n for n in combined[indicator_label_col].dropna().astype(str).unique()
+            if n.strip() and n.lower() not in ("nan", "none", "")
+        ]
+        title = sdmx_names[0] if sdmx_names else spec.get("title", "")
+    else:
+        title = spec.get("title", "")
 
     # Resolve column names — the LLM may use aliases or invent names
     x = _resolve_col(combined, x, ["TIME_PERIOD", "Year", "YEAR", "Geographic area", "Reference Areas", "REF_AREA"])
