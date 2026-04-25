@@ -154,6 +154,9 @@ def run_agent_until_pause(agent_messages: list) -> dict:
 
 _TOTAL_VALUES = {"_T", "Total", "TOTAL", "_ALL", "All"}
 
+# Values that mean "not applicable / no breakdown" — strip from breakdown dimensions in charts
+_NOT_APPLICABLE_VALUES = {"_Z", "_NA", "Not applicable", "Not Applicable", "N/A", "NA", "Unknown"}
+
 # Columns that are not disaggregation dimensions — never filter these
 _NON_DISAGG_COLS = {
     "TIME_PERIOD", "Year", "YEAR",
@@ -176,6 +179,20 @@ def _resolve_col(df: pd.DataFrame, requested: "str | None", fallbacks: list) -> 
         if col in df.columns:
             return col
     return None
+
+
+def _prefer_label_col(df: pd.DataFrame, col: "str | None") -> "str | None":
+    """
+    If col is an ALL_CAPS_CODE column (e.g. WEALTH_QUINTILE), prefer the human-readable
+    label column (e.g. 'Wealth Quintile') when it exists in the dataframe.
+    """
+    if not col:
+        return col
+    if col.replace("_", "").isupper():
+        candidate = " ".join(w.capitalize() for w in col.split("_"))
+        if candidate in df.columns:
+            return candidate
+    return col
 
 
 _GEO_COLS = {"Geographic area", "Reference Areas", "REF_AREA", "GEOGRAPHIC_AREA"}
@@ -216,7 +233,7 @@ def _resolve_duplicates(
     return result, applied
 
 
-def _render_chart(dfs: list, spec: dict) -> None:
+def _render_chart(dfs: list, spec: dict, key: str = "") -> None:
     if not dfs:
         return
 
@@ -227,8 +244,10 @@ def _render_chart(dfs: list, spec: dict) -> None:
     color = spec.get("color_by")
 
     # Apply filters specified by the LLM, but never filter on the color_by column
-    # (that would collapse the breakdown the user asked for)
+    # (that would collapse the breakdown the user asked for).
+    # Geo filters get special handling: try column aliases when the exact name is missing.
     color_lower = color.lower() if color else ""
+    _GEO_FILTER_ALIASES = ["Geographic area", "Reference Areas", "REF_AREA", "GEOGRAPHIC_AREA"]
     for col, val in spec.get("filters", {}).items():
         if col.lower() == color_lower:
             continue  # skip — this column is the breakdown dimension
@@ -236,6 +255,16 @@ def _render_chart(dfs: list, spec: dict) -> None:
             filtered = combined[combined[col] == val]
             if not filtered.empty:
                 combined = filtered
+        else:
+            # Try geo column aliases when the LLM uses a variant name
+            col_words = col.lower().replace("_", " ")
+            if any(g in col_words for g in ("geo", "area", "country", "region", "ref")):
+                for alias in _GEO_FILTER_ALIASES:
+                    if alias in combined.columns:
+                        filtered = combined[combined[alias] == val]
+                        if not filtered.empty:
+                            combined = filtered
+                            break
     chart_type = spec.get("chart_type", "line")
 
     # Prefer the actual indicator name from the SDMX response over the LLM-generated title.
@@ -252,11 +281,13 @@ def _render_chart(dfs: list, spec: dict) -> None:
     else:
         title = spec.get("title", "")
 
-    # Resolve column names — the LLM may use aliases or invent names
+    # Resolve column names — the LLM may use aliases or invent names.
+    # For color_by, also prefer a human-readable label column over a code column.
     x = _resolve_col(combined, x, ["TIME_PERIOD", "Year", "YEAR", "Geographic area", "Reference Areas", "REF_AREA"])
     y = _resolve_col(combined, y, ["OBS_VALUE"])
     if color:
         color = _resolve_col(combined, color, ["Geographic area", "Reference Areas", "REF_AREA", "Sex", "SEX", "Residence"])
+        color = _prefer_label_col(combined, color)
 
     if not x or not y:
         st.warning(f"Could not resolve chart columns. Available: {list(combined.columns)}")
@@ -270,6 +301,14 @@ def _render_chart(dfs: list, spec: dict) -> None:
     if auto_filters:
         st.caption(f"Showing aggregate totals — auto-filtered: {', '.join(auto_filters)}")
 
+
+    # Strip "Not applicable" / _Z rows from the breakdown dimension when real categories exist
+    if color and color in combined.columns:
+        unique_color_vals = set(combined[color].dropna().astype(str).unique())
+        na_in_data = unique_color_vals & _NOT_APPLICABLE_VALUES
+        real_vals = unique_color_vals - _NOT_APPLICABLE_VALUES
+        if na_in_data and real_vals:
+            combined = combined[~combined[color].astype(str).isin(na_in_data)]
 
     # Safeguard: cap high-cardinality color dimensions to top 8 by mean value
     MAX_COLOR_SERIES = 8
@@ -306,7 +345,7 @@ def _render_chart(dfs: list, spec: dict) -> None:
         )
 
     fig.update_layout(hovermode="x unified", legend_title=color or "")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{key}")
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +486,7 @@ def _attach_chart_to_last_message() -> None:
 def _render_chart_block(chart: dict, key: str) -> None:
     """Render chart (if spec present), download button, source expander, and debug log."""
     if chart.get("spec"):
-        _render_chart(chart["dfs"], chart["spec"])
+        _render_chart(chart["dfs"], chart["spec"], key=key)
     combined_csv = pd.concat(chart["dfs"], ignore_index=True)
     st.download_button(
         label="Download data (CSV)",

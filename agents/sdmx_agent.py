@@ -829,6 +829,9 @@ _NON_DISAGG_COLS = {
 }
 
 
+_TOTAL_CODES = {"_T", "_ALL", "_Z", "_NA", "TOTAL", "Total", "All", "Not applicable", "Not Applicable", "N/A", "NA", "Unknown", ""}
+
+
 def get_data_dimensions() -> str:
     """Return the breakdown dimensions available in the currently fetched data."""
     s = _get_session()
@@ -836,22 +839,46 @@ def get_data_dimensions() -> str:
         return "No data currently fetched — run query_sdmx_api first."
 
     combined = pd.concat(s.fetched_dfs, ignore_index=True)
-    lines = [
-        f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s).\n"
-        "Available breakdown dimensions (columns with >1 unique value):"
-    ]
-    found = False
+
+    breakable: list[str] = []      # columns with real sub-categories (can be used for color_by)
+    total_only: list[str] = []     # columns present but only aggregate/total value
+
     for col in combined.columns:
         if col in _NON_DISAGG_COLS or col.startswith("_"):
             continue
-        unique_vals = combined[col].dropna().unique()
-        if len(unique_vals) > 1:
-            found = True
-            vals_preview = sorted(str(v) for v in unique_vals)[:12]
-            suffix = f" … ({len(unique_vals)} total)" if len(unique_vals) > 12 else ""
-            lines.append(f"  {col}: {vals_preview}{suffix}")
-    if not found:
-        lines.append("  None — data has no additional breakdown dimensions.")
+        unique_vals = [str(v) for v in combined[col].dropna().unique()]
+        if not unique_vals:
+            continue
+        non_total = [v for v in unique_vals if v not in _TOTAL_CODES]
+        if len(non_total) > 1:
+            vals_preview = sorted(non_total)[:12]
+            suffix = f" … ({len(non_total)} total)" if len(non_total) > 12 else ""
+            breakable.append(f"  {col}: {vals_preview}{suffix}")
+        else:
+            # Column exists in the data but only carries an aggregate/total value
+            total_only.append(f"  {col} (only aggregate value — no breakdown available)")
+
+    lines = [f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s)."]
+
+    lines.append("\nBreakdowns available (can be used for color_by):")
+    lines += breakable if breakable else ["  None."]
+
+    lines.append("\nDimensions present but NOT disaggregated in this dataset:")
+    lines += total_only if total_only else ["  None."]
+
+    # Geography info for country-level filters
+    _GEO_LABEL_COLS = ["Geographic area", "Reference Areas"]
+    _GEO_CODE_COLS = ["REF_AREA"]
+    for col in _GEO_LABEL_COLS + _GEO_CODE_COLS:
+        if col in combined.columns:
+            unique_geos = sorted(combined[col].dropna().astype(str).unique().tolist())
+            if len(unique_geos) > 1:
+                lines.append(
+                    f"\nGeography (for country-level filters): "
+                    f"column='{col}', values={unique_geos}"
+                )
+            break
+
     return "\n".join(lines)
 
 
@@ -1069,9 +1096,12 @@ SYSTEM_PROMPT = (
     "   • Always filter out irrelevant disaggregations to their total/aggregate value "
     "     (e.g. SEX='_T', AGE='_T') unless the user specifically asks for a breakdown.\n"
     "6. Call run_quality_checks for each dataset fetched.\n"
-    "7. Summarise findings. End your answer with a 'Available breakdowns' section listing "
-    "   the dimensions from get_data_dimensions that the user could explore "
-    "   (e.g. '**Available breakdowns:** Sex, Age group, Wealth quintile — ask me to show any of these.').\n\n"
+    "7. Summarise findings. End your answer with:\n"
+    "   • An '**Available breakdowns:**' line listing ONLY the dimensions shown under "
+    "     'Breakdowns available' in get_data_dimensions. If that section says 'None', "
+    "     write 'No breakdowns available for this dataset.' "
+    "     NEVER suggest Sex, Age, Wealth or any other dimension unless it explicitly "
+    "     appears in the 'Breakdowns available' section of get_data_dimensions output.\n\n"
 
     "═══ MODE B — Follow-up on already-fetched data (user asks about a breakdown or different view) ═══\n"
     "Trigger: user asks to split/break down/show by a dimension (sex, age, wealth, residence, etc.) "
@@ -1079,7 +1109,12 @@ SYSTEM_PROMPT = (
     "DO NOT call search_data_dictionary, ask_user_to_select_indicator, or query_sdmx_api.\n"
     "1. Call get_data_dimensions to get the exact column names and values available.\n"
     "2. Call create_visualization with the appropriate color_by or filters for the requested breakdown.\n"
-    "3. Summarise the new view and again list remaining available breakdowns.\n\n"
+    "   • If the user restricts to a specific country (e.g. 'just for Thailand'), add a geography "
+    "     filter using the exact column name from get_data_dimensions "
+    "     (e.g. filters={'Geographic area': 'Thailand'} or filters={'REF_AREA': 'THA'}).\n"
+    "   • Use the exact column names and values returned by get_data_dimensions — do not invent names.\n"
+    "3. Summarise the new view. List remaining breakdowns from 'Breakdowns available' only — "
+    "   never suggest a dimension listed under 'Dimensions present but NOT disaggregated'.\n\n"
 
     "Always ask the user to choose an indicator — never pick one on their behalf."
 )
