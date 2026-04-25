@@ -342,10 +342,14 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
                         if key3 not in unicef_flows:
                             unicef_flows.append(key3)
                 if country_key not in country_map:
+                    yr_min = best_row.get("year_min")
+                    yr_max = best_row.get("year_max")
                     country_map[country_key] = {
                         "iso_id": iso_id,
                         "display_name": _display_name(country_key),
                         "flows": flows,
+                        "year_min": int(yr_min) if pd.notna(yr_min) else None,
+                        "year_max": int(yr_max) if pd.notna(yr_max) else None,
                     }
 
         # Borrow UNICEF flows into countries that lack them (covers partition gaps)
@@ -389,7 +393,13 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
             s.dataflow_cache[(primary_id, data["iso_id"])] = data["flows"]
 
         available_countries = [
-            {"country_key": ck, "geography_id": d["iso_id"], "display_name": d["display_name"]}
+            {
+                "country_key":  ck,
+                "geography_id": d["iso_id"],
+                "display_name": d["display_name"],
+                "year_min":     d.get("year_min"),
+                "year_max":     d.get("year_max"),
+            }
             for ck, d in country_map.items()
         ]
         missing_countries = [k for k in found if k not in country_map]
@@ -398,6 +408,7 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
         meta = meta_rows.iloc[0] if not meta_rows.empty else hits[hits["indicator_id"].isin(variant_ids)].iloc[0]
         emb_text = emb_text_lookup.get(primary_id, "")
         canonical_name = emb_text.split(".")[0].strip() if emb_text else str(meta["indicator"])
+
         records.append({
             "indicator_id":        primary_id,
             "indicator":           canonical_name,
@@ -411,10 +422,17 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
     for rec in records:
         sim = sim_lookup.get(rec["indicator_id"], 0.0)
         defn = str(rec.get("definition") or "N/A")[:200]
-        avail_str = ", ".join(
-            f"{ac['display_name']} ({ac['geography_id']})"
-            for ac in rec["available_countries"]
-        ) or "none"
+
+        def _fmt_country(ac: dict) -> str:
+            y0, y1 = ac.get("year_min"), ac.get("year_max")
+            years = (
+                f"{y0}–{y1}" if y0 and y1 and y0 != y1
+                else str(y0 or y1) if (y0 or y1)
+                else "?"
+            )
+            return f"{ac['display_name']} ({ac['geography_id']}, {years})"
+
+        avail_str = ", ".join(_fmt_country(ac) for ac in rec["available_countries"]) or "none"
         entry = (
             f"indicator_id={rec['indicator_id']}\n"
             f"   Name: {rec['indicator']}\n"
@@ -548,10 +566,9 @@ def query_sdmx_api(
     indicator_id: str,
     geography_id: str,
     geography_name: str,
-    start_period: str = "2000",
 ) -> str:
     """Try all cached dataflows for this indicator, rank by quality, return the best."""
-    qs = f"?format=csv&labels=both&startPeriod={start_period}"
+    qs = "?format=csv&labels=both"
 
     # Use all known dataflows from the search cache; fall back to what the model passed.
     # Cache values are 4-tuples: (agency, dataflow_id, geo_id, actual_indicator_id).
@@ -858,7 +875,18 @@ def get_data_dimensions() -> str:
             # Column exists in the data but only carries an aggregate/total value
             total_only.append(f"  {col} (only aggregate value — no breakdown available)")
 
-    lines = [f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s)."]
+    # Report the time range in the fetched data
+    time_col = next((c for c in ("TIME_PERIOD", "Year", "YEAR") if c in combined.columns), None)
+    if time_col:
+        years = pd.to_numeric(combined[time_col], errors="coerce").dropna()
+        if not years.empty:
+            time_range = f"{int(years.min())}–{int(years.max())}"
+        else:
+            time_range = "unknown"
+    else:
+        time_range = "unknown"
+
+    lines = [f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s). Time range in data: {time_range}."]
 
     lines.append("\nBreakdowns available (can be used for color_by):")
     lines += breakable if breakable else ["  None."]
@@ -970,7 +998,6 @@ TOOLS = [
                     "indicator_id":   {"type": "string", "description": "Indicator ID, e.g. 'CME_MRY0T4'."},
                     "geography_id":   {"type": "string", "description": "Geographic area code, e.g. 'KHM'."},
                     "geography_name": {"type": "string", "description": "Human-readable geography name, e.g. 'Cambodia'."},
-                    "start_period":   {"type": "string", "description": "Start year, default '2000'. No end period — always fetches up to the latest available data."},
                 },
                 "required": ["agency", "dataflow_id", "indicator_id", "geography_id", "geography_name"],
             },
@@ -1071,17 +1098,28 @@ SYSTEM_PROMPT = (
     "You are a UNICEF data analyst assistant. "
     "You have two modes depending on whether data has already been fetched.\n\n"
 
-    "═══ MODE A — New question (no data fetched yet, or user asks about a different indicator/country) ═══\n"
+    "Choose the mode for EVERY turn before acting:\n"
+    "  → MODE A if ANY of these are true:\n"
+    "      • No data has been fetched yet\n"
+    "      • User mentions a different indicator or country than what was fetched\n"
+    "      • User asks whether more/newer data exists, or about a time period not in the fetched data\n"
+    "      • User asks to refresh or update the data\n"
+    "  → MODE B only if ALL of these are true:\n"
+    "      • Data is already fetched\n"
+    "      • Same indicator and country as before\n"
+    "      • User only wants a different view/breakdown of the existing data\n\n"
+
+    "═══ MODE A — Fetch (or re-fetch) data ═══\n"
     "1. Call search_data_dictionary to retrieve the top matching indicators.\n"
     "   The results show, for each indicator, which countries it is available for "
     "   and which are NOT available.\n"
     "2. Call ask_user_to_select_indicator to present the options and let the user choose. "
     "   For each option include: indicator name and in parentheses the countries "
-    "   where data is available. If some requested countries are not available, note them too. "
-    "   Example: '1. Immunization - DTP3 (Thailand, Myanmar) — not available in: Vietnam, Laos'\n"
+    "   where data is available with their year range. If some requested countries are not available, note them too. "
+    "   Example: '1. Immunization - DTP3 (Thailand 1980–2020, Myanmar 2000–2019) — not available in: Vietnam'\n"
     "   Do NOT list the category or individual dataflows as separate options.\n"
     "3. Call query_sdmx_api ONLY for countries where the selected indicator is available. "
-    "   The tool automatically tests all available dataflows and returns the best data. "
+    "   The tool fetches the full available history — do NOT filter by year here. "
     "   Note the exact column names in each response — you will need them for the chart.\n"
     "   If a country has no data, mention it clearly in your final answer.\n"
     "4. Call get_data_dimensions to discover what breakdown dimensions exist in the fetched data.\n"
@@ -1095,6 +1133,8 @@ SYSTEM_PROMPT = (
     "     - Or use it as the x-axis in a bar chart filtered to the latest time point.\n"
     "   • Always filter out irrelevant disaggregations to their total/aggregate value "
     "     (e.g. SEX='_T', AGE='_T') unless the user specifically asks for a breakdown.\n"
+    "   • If the user asked about a specific year, add filters={'TIME_PERIOD': '2019'} (as a string). "
+    "     For a year range, leave TIME_PERIOD unfiltered and let the chart show the full trend.\n"
     "6. Call run_quality_checks for each dataset fetched.\n"
     "7. Summarise findings. End your answer with:\n"
     "   • An '**Available breakdowns:**' line listing ONLY the dimensions shown under "
@@ -1103,11 +1143,9 @@ SYSTEM_PROMPT = (
     "     NEVER suggest Sex, Age, Wealth or any other dimension unless it explicitly "
     "     appears in the 'Breakdowns available' section of get_data_dimensions output.\n\n"
 
-    "═══ MODE B — Follow-up on already-fetched data (user asks about a breakdown or different view) ═══\n"
-    "Trigger: user asks to split/break down/show by a dimension (sex, age, wealth, residence, etc.) "
-    "WITHOUT mentioning a new indicator or country.\n"
+    "═══ MODE B — Visualise differently (same data, different view) ═══\n"
     "DO NOT call search_data_dictionary, ask_user_to_select_indicator, or query_sdmx_api.\n"
-    "1. Call get_data_dimensions to get the exact column names and values available.\n"
+    "1. Call get_data_dimensions to get the exact column names, values, and TIME_PERIOD range available.\n"
     "2. Call create_visualization with the appropriate color_by or filters for the requested breakdown.\n"
     "   • If the user restricts to a specific country (e.g. 'just for Thailand'), add a geography "
     "     filter using the exact column name from get_data_dimensions "

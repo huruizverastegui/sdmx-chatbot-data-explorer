@@ -42,3 +42,4 @@ Thumbs.db
 data/mapping_sdmx_*.csv
 data/*.json
 data/partitions/
+data/build_cache/
