@@ -1,0 +1,420 @@
+[
+  {
+    "flow_id": "mortality_002",
+    "name": "Neonatal mortality breakdown by sex",
+    "program_area": "Child Mortality",
+    "pass_rate": 0.75,
+    "turns": [
+      {
+        "question": "What is the neonatal mortality rate in Ethiopia?",
+        "expected_mode": "A",
+        "duration_s": 24.8,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": true,
+          "indicator_hint": true,
+          "no_error": true
+        },
+        "viz_checks": {
+          "viz_spec_exists": true,
+          "data_available": true,
+          "x_col_exists": true,
+          "y_col_exists": true,
+          "rows_after_filters": 48,
+          "data_nonempty": true,
+          "y_has_values": 48,
+          "line_n_points": 48,
+          "line_has_trend": true,
+          "llm_eval": {
+            "chart_type_appropriate": true,
+            "title_matches_question": true,
+            "axes_make_sense": true,
+            "answers_question": true,
+            "issues": ""
+          }
+        },
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "neonatal mortality rate",
+              "countries": [
+                "Ethiopia"
+              ],
+              "top_k": 8
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found several indicators related to neonatal mortality rate in Ethiopia. Please choose which one you'd like to explore:\n1. Neonatal mortality rate (1977\u20132024)\n2. Neonatal mortality rate (deaths per "
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "CME_MRM0",
+              "geography_id": "ETH",
+              "geography_name": "Ethiopia"
+            }
+          },
+          {
+            "name": "run_quality_checks",
+            "args": {
+              "data_summary": "REF_AREA,Geographic area,INDICATOR,Indicator,SEX,Sex,WEALTH_QUINTILE,Wealth Quintile,DATA_SOURCE,COUNTRY_NOTES,UNIT_MEASURE,Unit of measure,TIME_PERIOD,OBS_VALUE,REF_PERIOD,LOWER_BOUND,UPPER_BOUND,OBS_STATUS,Observation Status\nETH,Ethiopia,CME_MRM0,Neonatal mortality rate,_T,Total,_T,Total,UN_IGME,NaN,D_PER_1000_B,Deaths per 1,000 live births,1977,66.977523,NaN,58.068466,76.790263,A,Normal value\nETH,Ethiopia,CME_MRM0,Neonatal mortality rate,_T,Total,_T,Total,UN_IGME,NaN,D_PER_1000_B,Deaths per 1,000 live births,1978,67.088396,NaN,58.665653,76.390297,A,Normal value\nETH,Ethiopia,CME_MRM0,Neonatal mortality rate,_T,Total,_T,Total,UN_IGME,NaN,D_PER_1000_B,Deaths per 1,000 live births,1979,67.242694,NaN,59.077036,76.303757,A,Normal value\nETH,Ethiopia,CME_MRM0,Neonatal mortality rate,_T,Total,_T,Total,UN_IGME,NaN,D_PER_1000_B,Deaths per 1,000 live births,1980,67.284588,NaN,59.400486,76.015585,A,Normal value\nETH,Ethiopia,CME_MRM0,Neonatal mortality rate,_T,Total,_T,Total,UN_IGME,NaN,D_PER_1000_B,Deaths per 1,000 live births,1981,67.030662,NaN,59.448620,75.490262,A,Normal value",
+              "indicator_id": "CME_MRM0",
+              "indicator_name": "Neonatal mortality rate",
+              "geography_id": "ETH"
+            }
+          },
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          },
+          {
+            "name": "create_visualization",
+            "args": {
+              "chart_type": "line",
+              "x_column": "TIME_PERIOD",
+              "y_column": "OBS_VALUE",
+              "title": "Neonatal Mortality Rate in Ethiopia (1977\u20132024)"
+            }
+          }
+        ],
+        "final_answer": "The neonatal mortality rate in Ethiopia is available for the years 1977 to 2024. The data represents deaths per 1,000 live births. Over this period, the rate has varied approximately between 25.23 and 67.41 deaths per 1,000 live births. The data quality is high with a full data pass check.\n\nI have prepared a line chart to show the trend of the neonatal mortality rate in Ethiopia from 1977 to 2024.\n\nAvailable breakdowns: No breakdowns available for this dataset."
+      },
+      {
+        "question": "Can you break it down by sex?",
+        "expected_mode": "B",
+        "duration_s": 3.8,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "visualization_created": false,
+          "breakdown_requested": false,
+          "no_error": true
+        },
+        "viz_checks": {},
+        "tool_calls": [
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          }
+        ],
+        "final_answer": "The neonatal mortality rate data for Ethiopia does not have a breakdown by sex available; only aggregate sex values are reported. If you want, I can show the data in other ways or for other indicators or countries. What would you like to do next?"
+      }
+    ]
+  },
+  {
+    "flow_id": "wash_001",
+    "name": "Drinking water access in Nigeria urban vs rural",
+    "program_area": "WASH",
+    "pass_rate": 0.75,
+    "turns": [
+      {
+        "question": "What percentage of people in Nigeria have access to basic drinking water?",
+        "expected_mode": "A",
+        "duration_s": 17.6,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": true,
+          "indicator_hint": true,
+          "no_error": true
+        },
+        "viz_checks": {
+          "viz_spec_exists": true,
+          "data_available": true,
+          "x_col_exists": true,
+          "y_col_exists": true,
+          "rows_after_filters": 25,
+          "data_nonempty": true,
+          "y_has_values": 25,
+          "line_n_points": 25,
+          "line_has_trend": true,
+          "llm_eval": {
+            "chart_type_appropriate": true,
+            "title_matches_question": true,
+            "axes_make_sense": true,
+            "answers_question": true,
+            "issues": ""
+          }
+        },
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "percentage of people with access to basic drinking water",
+              "countries": [
+                "Nigeria"
+              ]
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found several indicators related to the percentage of people with access to basic drinking water in Nigeria. Please select which one you want to explore:\n1. Proportion of population using basic drin"
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "WS_PPL_W-B",
+              "geography_id": "NGA",
+              "geography_name": "Nigeria"
+            }
+          },
+          {
+            "name": "run_quality_checks",
+            "args": {
+              "data_summary": "REF_AREA,Geographic area,INDICATOR,Indicator,SEX,Sex,TIME_PERIOD,OBS_VALUE,UNIT_MULTIPLIER,Unit multiplier,UNIT_MEASURE,Unit of measure,OBS_STATUS,Observation Status,OBS_CONF,Observation confidentaility,LOWER_BOUND,UPPER_BOUND,WGTD_SAMPL_SIZE,OBS_FOOTNOTE,SERIES_FOOTNOTE,DATA_SOURCE,SOURCE_LINK,CUSTODIAN,TIME_PERIOD_METHOD,Time period activity related to when the data are collected,REF_PERIOD,COVERAGE_TIME,AGE,Current age\nNGA,Nigeria,WS_PPL_W-B,Proportion of population using basic drinking water services,_T,Total,2000,31.868441,,,,PCNT,%,,,,,,,,,WHO/UNICEF Joint Monitoring Programme (),,,,,,,_T,Total\nNGA,Nigeria,WS_PPL_W-B,Proportion of population using basic drinking water services,_T,Total,2001,32.788944,,,,PCNT,%,,,,,,,,,WHO/UNICEF Joint Monitoring Programme (),,,,,,,_T,Total\nNGA,Nigeria,WS_PPL_W-B,Proportion of population using basic drinking water services,_T,Total,2002,33.535095,,,,PCNT,%,,,,,,,,,WHO/UNICEF Joint Monitoring Programme (),,,,,,,_T,Total\nNGA,Nigeria,WS_PPL_W-B,Proportion of population using basic drinking water services,_T,Total,2003,34.264793,,,,PCNT,%,,,,,,,,,WHO/UNICEF Joint Monitoring Programme (),,,,,,,_T,Total\nNGA,Nigeria,WS_PPL_W-B,Proportion of population using basic drinking water services,_T,Total,2004,34.977314,,,,PCNT,%,,,,,,,,,WHO/UNICEF Joint Monitoring Programme (),,,,,,,_T,Total",
+              "indicator_id": "WS_PPL_W-B",
+              "indicator_name": "Proportion of population using basic drinking water services",
+              "geography_id": "NGA"
+            }
+          },
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          },
+          {
+            "name": "create_visualization",
+            "args": {
+              "chart_type": "line",
+              "x_column": "TIME_PERIOD",
+              "y_column": "OBS_VALUE",
+              "title": "Proportion of population using basic drinking water services in Nigeria (2000\u20132024)"
+            }
+          }
+        ],
+        "final_answer": "The proportion of the population using basic drinking water services in Nigeria has been tracked from 2000 to 2024. The percentage has ranged approximately from 31.9% in 2000 to around 52.3% in recent years.\n\nI created a line chart showing this trend over time for Nigeria.\n\nAvailable breakdowns: No breakdowns available for this dataset. If you want information on a specific year or a comparison with another country, please let me know."
+      },
+      {
+        "question": "Can you split that by urban and rural?",
+        "expected_mode": "B",
+        "duration_s": 3.2,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "visualization_created": false,
+          "breakdown_requested": false,
+          "no_error": true
+        },
+        "viz_checks": {},
+        "tool_calls": [
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          }
+        ],
+        "final_answer": "The data for the proportion of the population using basic drinking water services in Nigeria does not have an available breakdown by urban and rural areas. The dataset only contains aggregate values without disaggregation by location or other dimensions.\n\nIf you would like, I can help with other available views or indicators."
+      }
+    ]
+  },
+  {
+    "flow_id": "education_001",
+    "name": "Out-of-school girls in Pakistan with gender gap",
+    "program_area": "Education",
+    "pass_rate": 0.833,
+    "turns": [
+      {
+        "question": "What is the out-of-school rate for girls at primary level in Pakistan?",
+        "expected_mode": "A",
+        "duration_s": 22.6,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": true,
+          "indicator_hint": true,
+          "no_error": true
+        },
+        "viz_checks": {
+          "viz_spec_exists": true,
+          "data_available": true,
+          "x_col_exists": true,
+          "y_col_exists": true,
+          "color_col_exists": true,
+          "rows_after_filters": 3,
+          "data_nonempty": true,
+          "y_has_values": 3,
+          "color_n_unique": 3,
+          "color_cardinality_ok": true,
+          "llm_eval": {
+            "chart_type_appropriate": true,
+            "title_matches_question": true,
+            "axes_make_sense": true,
+            "answers_question": true,
+            "issues": ""
+          }
+        },
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "out-of-school rate girls primary Pakistan",
+              "countries": [
+                "Pakistan"
+              ]
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found several indicators for out-of-school rates for primary level in Pakistan. Please choose the one you want to explore:\n1. Out-of-school rate for children of primary school age (Pakistan 2018)\n2."
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "EDU",
+              "indicator_id": "ED_ROFST_L1",
+              "geography_id": "PAK",
+              "geography_name": "Pakistan"
+            }
+          },
+          {
+            "name": "run_quality_checks",
+            "args": {
+              "data_summary": "Indicator: ED_ROFST_L1  |  Geography: PAK\nRows: 3\nNon-null observations: 3\nValue range: 19.4 \u2013 26.7\nMean value: 23.03\nTime periods: 2018",
+              "indicator_id": "ED_ROFST_L1",
+              "indicator_name": "Out-of-school rate for children of primary school age",
+              "geography_id": "PAK"
+            }
+          },
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          },
+          {
+            "name": "create_visualization",
+            "args": {
+              "chart_type": "bar",
+              "x_column": "Sex",
+              "y_column": "OBS_VALUE",
+              "title": "Out-of-school rate for children of primary school age by Sex in Pakistan (2018)",
+              "color_by": "Sex"
+            }
+          }
+        ],
+        "final_answer": "The out-of-school rate for children of primary school age in Pakistan for the year 2018 is as follows:\n- Girls (Female): 26.7%\n- Boys (Male): 19.4%\n\nThis indicates that the out-of-school rate for girls at the primary level is higher than for boys in Pakistan. The data is from the DHS 2017-18 survey and passes quality checks.\n\nAvailable breakdowns: Sex"
+      },
+      {
+        "question": "How does it compare with boys?",
+        "expected_mode": "B",
+        "duration_s": 2.4,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "visualization_created": false,
+          "breakdown_requested": false,
+          "no_error": true
+        },
+        "viz_checks": {},
+        "tool_calls": [],
+        "final_answer": "From the data for Pakistan on the out-of-school rate for children of primary school age in 2018:\n\n- The out-of-school rate for girls is 26.7%.\n- The out-of-school rate for boys is 19.4%.\n\nThis means the out-of-school rate for girls is higher than for boys by about 7.3 percentage points, indicating that girls are more likely to be out of school at the primary level compared to boys in Pakistan."
+      },
+      {
+        "question": "Show me Afghanistan and Bangladesh for comparison",
+        "expected_mode": "A",
+        "duration_s": 34.5,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": true,
+          "multi_country": true,
+          "no_error": true
+        },
+        "viz_checks": {
+          "viz_spec_exists": true,
+          "data_available": true,
+          "x_col_exists": true,
+          "y_col_exists": true,
+          "color_col_exists": true,
+          "rows_after_filters": 23,
+          "data_nonempty": true,
+          "y_has_values": 23,
+          "color_n_unique": 3,
+          "color_cardinality_ok": true,
+          "llm_eval": {
+            "chart_type_appropriate": true,
+            "title_matches_question": false,
+            "axes_make_sense": true,
+            "answers_question": false,
+            "issues": "Title includes Pakistan though user asked only for Afghanistan and Bangladesh; chart likely includes Pakistan data which is not requested."
+          }
+        },
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "out-of-school rate primary girls",
+              "countries": [
+                "Pakistan",
+                "Afghanistan",
+                "Bangladesh"
+              ],
+              "top_k": 5
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found these indicators related to 'out-of-school rate for girls at primary level' for Pakistan, Afghanistan, and Bangladesh:\n1. Out-of-school rate for children of primary school age (Pakistan 2018, "
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "ED_ROFST_L1",
+              "geography_id": "PAK",
+              "geography_name": "Pakistan"
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "ED_ROFST_L1",
+              "geography_id": "AFG",
+              "geography_name": "Afghanistan"
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "ED_ROFST_L1",
+              "geography_id": "BGD",
+              "geography_name": "Bangladesh"
+            }
+          },
+          {
+            "name": "get_data_dimensions",
+            "args": {}
+          },
+          {
+            "name": "create_visualization",
+            "args": {
+              "chart_type": "bar",
+              "x_column": "Geographic area",
+              "y_column": "OBS_VALUE",
+              "color_by": "Sex",
+              "title": "Out-of-school rate for children of primary school age by Sex in Afghanistan, Bangladesh, and Pakistan (latest available years)"
+            }
+          }
+        ],
+        "final_answer": "Here is the comparison of out-of-school rates for children of primary school age by sex for Afghanistan, Bangladesh, and Pakistan based on the latest available data:\n\n- Afghanistan (2022): Girls ~60.2%, Boys ~45.8%\n- Bangladesh (2019): Girls ~4.5%, Boys ~8.1%\n- Pakistan (2018): Girls ~26.7%, Boys ~19.4%\n\nGirls in Afghanistan face the highest out-of-school rate at primary level, followed by Pakistan, while Bangladesh has the lowest rates overall with boys slightly higher than girls.\n\nAvailable br"
+      }
+    ]
+  }
+]

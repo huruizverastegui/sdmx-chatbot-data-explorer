@@ -1,0 +1,93 @@
+[
+  {
+    "flow_id": "health_004",
+    "name": "ANC coverage trend",
+    "program_area": "Health",
+    "pass_rate": 0.714,
+    "turns": [
+      {
+        "question": "What is the antenatal care coverage in Ethiopia?",
+        "expected_mode": "A",
+        "duration_s": 11.8,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": false,
+          "indicator_hint": true,
+          "no_error": true
+        },
+        "viz_checks": {},
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "antenatal care coverage",
+              "countries": [
+                "Ethiopia"
+              ],
+              "top_k": 8
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found several indicators related to antenatal care coverage in Ethiopia. Please choose one to explore:\n1. Antenatal care (at least one visit) (Ethiopia 2016)\n2. Coverage of essential health services"
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CME",
+              "indicator_id": "COB7",
+              "geography_id": "ETH",
+              "geography_name": "Ethiopia"
+            }
+          }
+        ],
+        "final_answer": "There is no data available for the indicator \"Antenatal care (at least one visit)\" in Ethiopia from the source I checked.\n\nWould you like to explore one of the other antenatal care coverage indicators available for Ethiopia instead? For example, \"Antenatal care (four or more visits)\" or \"Antenatal care 1+ visit - percentage of women attended at least once during pregnancy by skilled health personnel\"?"
+      },
+      {
+        "question": "Is there more recent data than what you showed?",
+        "expected_mode": "A",
+        "duration_s": 10.7,
+        "error": null,
+        "scores": {
+          "mode_correct": true,
+          "data_retrieved": false,
+          "no_error": true
+        },
+        "viz_checks": {},
+        "tool_calls": [
+          {
+            "name": "search_data_dictionary",
+            "args": {
+              "query": "antenatal care coverage",
+              "countries": [
+                "Ethiopia"
+              ],
+              "top_k": 10
+            }
+          },
+          {
+            "name": "ask_user_to_select_indicator",
+            "args": {
+              "question": "I found several antenatal care coverage indicators for Ethiopia, with data from various years. Please choose which indicator you want to explore:\n\n1. Antenatal care (at least one visit) (Ethiopia 2016"
+            }
+          },
+          {
+            "name": "query_sdmx_api",
+            "args": {
+              "agency": "UNICEF",
+              "dataflow_id": "CMT",
+              "indicator_id": "COB7",
+              "geography_id": "ETH",
+              "geography_name": "Ethiopia"
+            }
+          }
+        ],
+        "final_answer": "The indicator \"Antenatal care (at least one visit)\" for Ethiopia in 2016 has no data available in the source I checked.\n\nWould you like to explore another antenatal care indicator from the list, such as \"Antenatal care (four or more visits)\" or \"Antenatal care 1+ visit - percentage of women attended at least once during pregnancy by skilled health personnel\" that have data from 2000 to 2019?"
+      }
+    ]
+  }
+]

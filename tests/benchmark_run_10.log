@@ -1,0 +1,128 @@
+Benchmark: 10 flows loaded from benchmark_scenarios.yaml
+
+[1/10] Running: health_001 — DTP3 immunization Thailand then region
+
+[2/10] Running: health_002 — Measles vaccination in West Africa
+
+[3/10] Running: mortality_001 — Under-5 mortality comparison Southeast Asia
+
+[4/10] Running: mortality_002 — Neonatal mortality breakdown by sex
+
+[5/10] Running: nutrition_001 — Child stunting South Asia with wealth breakdown
+
+[6/10] Running: nutrition_002 — Wasting in Yemen - recency check
+
+[7/10] Running: wash_001 — Drinking water access in Nigeria urban vs rural
+
+[8/10] Running: education_001 — Out-of-school girls in Pakistan with gender gap
+
+[9/10] Running: protection_001 — Child labour in South/Southeast Asia
+
+[10/10] Running: gender_001 — Female genital mutilation in East Africa
+
+══════════════════════════════════════════════════════════════════════
+SDMX CHATBOT BENCHMARK RESULTS
+══════════════════════════════════════════════════════════════════════
+Flows: 10  |  Total assertions: 106  |  Passed: 93  |  Overall: 88%
+
+▸ Child Mortality (84%)
+  ✓ [mortality_001] Under-5 mortality comparison Southeast Asia — 100%
+    Turn 1 [mode A✓] 19.0s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=225  y_values=225  color_unique=1  line_pts=50  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode B✓] 4.6s  mode_correct:✓  visualization_created:✓  no_error:✓
+      viz  rows=323  y_values=323  color_unique=3  line_pts=50  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 3 [mode A✓] 27.3s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=683  y_values=683  color_unique=3  line_pts=61  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+  – [mortality_002] Neonatal mortality breakdown by sex — 62%
+    Turn 1 [mode A✓] 23.4s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=48  y_values=48  line_pts=48  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode A✗] 27.2s  mode_correct:✗  visualization_created:✗  breakdown_requested:✗  no_error:✓
+
+▸ Child Protection (100%)
+  ✓ [protection_001] Child labour in South/Southeast Asia — 100%
+    Turn 1 [mode A✓] 15.2s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=3  y_values=1  color_unique=3  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✗  → OBS_VALUE for male and female are NaN, so the chart would not show the child labour rate by sex, only total is available.
+    Turn 2 [mode B✓] 4.5s  mode_correct:✓  visualization_created:✓  breakdown_requested:✓  no_error:✓
+      viz  rows=3  y_values=1  color_unique=3  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✗  → OBS_VALUE is NaN for sex-specific rows, so the chart would not display meaningful data by sex.
+    Turn 3 [mode A✓] 16.4s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=9  y_values=2  color_unique=3  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✗  → Data only includes Bangladesh; Nepal and Cambodia data missing, so comparison is not possible.
+
+▸ Education (83%)
+  ✓ [education_001] Out-of-school girls in Pakistan with gender gap — 83%
+    Turn 1 [mode A✓] 20.9s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=3  y_values=3  color_unique=3  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode B✓] 2.6s  mode_correct:✓  visualization_created:✗  breakdown_requested:✗  no_error:✓
+    Turn 3 [mode A✓] 36.0s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=23  y_values=23  color_unique=3  
+      llm  chart_type_a:✓  title_matche:✗  axes_make_se:✓  answers_ques:✗  → Title includes Pakistan, but user asked only for Afghanistan and Bangladesh; no filter applied to exclude Pakistan, so chart likely includes unwanted data.
+
+▸ Gender (82%)
+  ✓ [gender_001] Female genital mutilation in East Africa — 82%
+    Turn 1 [mode A✓] 14.3s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=7  y_values=7  line_pts=7  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode A✓] 18.7s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=21  y_values=21  color_unique=3  line_pts=21  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 3 [mode A✗] 6.0s  mode_correct:✗  visualization_created:✗  no_error:✓
+
+▸ Health (84%)
+  ✓ [health_001] DTP3 immunization Thailand then region — 85%
+    Turn 1 [mode A✓] 13.7s  mode_correct:✓  data_retrieved:✓  visualization_created:✓  indicator_hint:✓  no_error:✓
+      viz  rows=1  y_values=1  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode A✓] 14.4s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=2  y_values=2  color_unique=2  
+      llm  chart_type_a:✓  title_matche:✗  axes_make_se:✓  answers_ques:✗  → Title only mentions Cambodia and Myanmar, missing Vietnam as requested by user.
+    Turn 3 [mode B✓] 2.6s  mode_correct:✓  visualization_created:✗  breakdown_requested:✗  no_error:✓
+  ✓ [health_002] Measles vaccination in West Africa — 83%
+    Turn 1 [mode A✓] 15.7s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=89  y_values=89  color_unique=10  line_pts=37  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode A✓] 30.0s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=277  y_values=277  color_unique=3  line_pts=41  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 3 [mode B✓] 3.5s  mode_correct:✓  visualization_created:✗  breakdown_requested:✗  no_error:✓
+
+▸ Nutrition (100%)
+  ✓ [nutrition_001] Child stunting South Asia with wealth breakdown — 100%
+    Turn 1 [mode A✓] 22.3s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=7  y_values=2  line_pts=5  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✗  → OBS_VALUE is NaN for all years in sample data, so the chart would not show actual stunting rates.
+    Turn 2 [mode B✓] 5.0s  mode_correct:✓  visualization_created:✓  breakdown_requested:✓  no_error:✓
+      viz  rows=7  y_values=2  color_unique=3  line_pts=5  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✗  → OBS_VALUE is NaN for all years in sample data, so no actual data to plot; also no filter applied to stratify by WEALTH_QUINTILE, so data may not be broken down by wealth quintile as requested.
+    Turn 3 [mode A✓] 15.7s  mode_correct:✓  data_retrieved:✓  multi_country:✓  no_error:✓
+      viz  rows=18  y_values=6  color_unique=3  line_pts=8  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+  ✓ [nutrition_002] Wasting in Yemen - recency check — 100%
+    Turn 1 [mode A✓] 11.7s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+    Turn 2 [mode A✓] 11.5s  mode_correct:✓  data_retrieved:✓  no_error:✓
+
+▸ WASH (75%)
+  ✓ [wash_001] Drinking water access in Nigeria urban vs rural — 75%
+    Turn 1 [mode A✓] 34.9s  mode_correct:✓  data_retrieved:✓  indicator_hint:✓  no_error:✓
+      viz  rows=25  y_values=25  line_pts=25  
+      llm  chart_type_a:✓  title_matche:✓  axes_make_se:✓  answers_ques:✓
+    Turn 2 [mode B✓] 3.2s  mode_correct:✓  visualization_created:✗  breakdown_requested:✗  no_error:✓
+
+Data retrieval success by program area:
+  Area                       Flows   Retrieved
+  Child Mortality                2        100%
+  Child Protection               1        100%
+  Education                      1        100%
+  Gender                         1        100%
+  Health                         2        100%
+  Nutrition                      2        100%
+  WASH                           1        100%
+
+Results saved → tests/benchmark_results_10.json
+

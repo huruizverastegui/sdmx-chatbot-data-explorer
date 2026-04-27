@@ -1,0 +1,447 @@
+## UNICEF SDMX Chatbot — Benchmark Scenarios
+## Each flow is a multi-turn conversation mimicking a real UNICEF programme officer.
+## expected_mode: A = fetch new data, B = re-visualise existing data
+## assertions are checked against the agent's recorded tool calls and final answer.
+
+flows:
+
+  # ── HEALTH / IMMUNIZATION ──────────────────────────────────────────────
+
+  - id: health_001
+    name: "DTP3 immunization Thailand trend and region"
+    program_area: Health
+    turns:
+      - question: "What is the DTP3 immunization coverage in Thailand?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["DTP3", "diphtheria", "immunization"]
+      - question: "Can you show me the same for Vietnam, Cambodia, and Myanmar?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+      - question: "Show the trend for Thailand since 2000"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  - id: health_002
+    name: "Measles vaccination in West Africa"
+    program_area: Health
+    turns:
+      - question: "What is the measles vaccination rate in Nigeria?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["measles", "MCV", "vaccination"]
+      - question: "How does it compare with Ghana and Senegal?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+      - question: "Add Burkina Faso and Ivory Coast to the comparison"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: health_003
+    name: "Skilled birth attendant in South Asia"
+    program_area: Health
+    turns:
+      - question: "What percentage of births in Bangladesh are attended by skilled health personnel?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["skilled", "birth", "attendant"]
+      - question: "Compare that with India, Nepal, and Pakistan"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: health_004
+    name: "ANC coverage trend"
+    program_area: Health
+    turns:
+      - question: "What is the antenatal care coverage in Ethiopia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["antenatal", "ANC", "prenatal"]
+      - question: "Is there more recent data than what you showed?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+
+  # ── CHILD MORTALITY ────────────────────────────────────────────────────
+
+  - id: mortality_001
+    name: "Under-5 mortality comparison Southeast Asia"
+    program_area: Child Mortality
+    turns:
+      - question: "What is the under-5 mortality rate in Cambodia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["mortality", "under-5", "U5MR", "CME"]
+      - question: "Show me the trend since 2000"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+      - question: "Now add Vietnam and Laos for comparison"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: mortality_002
+    name: "Neonatal mortality trend and multi-country"
+    program_area: Child Mortality
+    turns:
+      - question: "What is the neonatal mortality rate in Ethiopia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["neonatal", "mortality"]
+      - question: "Show the trend since 2000"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  - id: mortality_003
+    name: "Maternal mortality in Latin America"
+    program_area: Child Mortality
+    turns:
+      - question: "What is the maternal mortality ratio in Peru?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["maternal", "mortality"]
+      - question: "Compare with Bolivia, Ecuador, and Colombia"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+      - question: "Show as a bar chart for the latest year"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  # ── NUTRITION ──────────────────────────────────────────────────────────
+
+  - id: nutrition_001
+    name: "Child stunting South Asia with wealth breakdown"
+    program_area: Nutrition
+    turns:
+      - question: "What is the stunting rate among children under 5 in Bangladesh?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["stunting", "height-for-age"]
+      - question: "Break it down by wealth quintile"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "wealth"
+      - question: "Now compare with Nepal and India"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: nutrition_002
+    name: "Wasting in Yemen - recency check"
+    program_area: Nutrition
+    turns:
+      - question: "What is the wasting rate in Yemen?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["wasting", "acute malnutrition", "weight-for-height"]
+      - question: "Do you have data from 2022 or more recent?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+
+  - id: nutrition_003
+    name: "Exclusive breastfeeding in Sub-Saharan Africa"
+    program_area: Nutrition
+    turns:
+      - question: "What is the exclusive breastfeeding rate in Uganda?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["breastfeeding", "EBF"]
+      - question: "Show me the trend over the past 10 years"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+      - question: "How does Uganda compare with Kenya and Tanzania?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  # ── WASH ───────────────────────────────────────────────────────────────
+
+  - id: wash_001
+    name: "Drinking water access in Nigeria urban vs rural"
+    program_area: WASH
+    turns:
+      - question: "What percentage of people in Nigeria have access to basic drinking water?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["drinking water", "water", "WASH"]
+      - question: "Can you split that by urban and rural?"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "residence"
+
+  - id: wash_002
+    name: "Open defecation in South Asia over time"
+    program_area: WASH
+    turns:
+      - question: "What is the open defecation rate in India?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["open defecation", "sanitation", "ODF"]
+      - question: "Show the trend from 2000 to now — has it improved?"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+      - question: "Compare with Pakistan and Bangladesh"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: wash_003
+    name: "Hand washing facilities"
+    program_area: WASH
+    turns:
+      - question: "What proportion of households in Kenya have basic handwashing facilities?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["handwashing", "hygiene", "WASH"]
+      - question: "Is that higher or lower than Tanzania and Ethiopia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  # ── EDUCATION ──────────────────────────────────────────────────────────
+
+  - id: education_001
+    name: "Out-of-school girls in Pakistan with gender gap"
+    program_area: Education
+    turns:
+      - question: "What is the out-of-school rate for girls at primary level in Pakistan?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["out-of-school", "education", "attendance"]
+      - question: "How does it compare with boys?"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "sex"
+      - question: "Show me Afghanistan and Bangladesh for comparison"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: education_002
+    name: "Pre-primary enrollment in West Africa"
+    program_area: Education
+    turns:
+      - question: "What is the pre-primary education enrollment rate in Senegal?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["pre-primary", "preschool", "early childhood", "enrollment"]
+      - question: "Compare with Côte d'Ivoire and Ghana"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: education_003
+    name: "Literacy rates"
+    program_area: Education
+    turns:
+      - question: "What is the youth literacy rate in Mali?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["literacy"]
+      - question: "Show by sex"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "sex"
+
+  # ── CHILD PROTECTION ───────────────────────────────────────────────────
+
+  - id: protection_001
+    name: "Child labour in South/Southeast Asia"
+    program_area: Child Protection
+    turns:
+      - question: "What is the child labour rate in Bangladesh?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["child labour", "child labor", "work"]
+      - question: "Break it down by sex"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "sex"
+      - question: "Compare with Nepal and Cambodia"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: protection_002
+    name: "Child marriage in Sub-Saharan Africa"
+    program_area: Child Protection
+    turns:
+      - question: "What is the child marriage rate in Niger?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["child marriage", "married before 18"]
+      - question: "How does Niger compare to other West African countries?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+      - question: "Show as a bar chart"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  - id: protection_003
+    name: "Birth registration in Central Africa"
+    program_area: Child Protection
+    turns:
+      - question: "What is the birth registration rate in DRC?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["birth registration", "civil registration"]
+      - question: "What about Angola and Republic of Congo?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  # ── SOCIAL POLICY ──────────────────────────────────────────────────────
+
+  - id: social_001
+    name: "Social protection coverage for children"
+    program_area: Social Policy
+    turns:
+      - question: "What is the social protection coverage for children in Bolivia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["social protection", "coverage", "benefits"]
+      - question: "Compare with Paraguay and Ecuador"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  - id: social_002
+    name: "Child poverty in Eastern Europe"
+    program_area: Social Policy
+    turns:
+      - question: "What is the child poverty rate in Romania?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["poverty", "deprivation"]
+      - question: "Show the trend since 2010"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  # ── HUMANITARIAN ───────────────────────────────────────────────────────
+
+  - id: humanitarian_001
+    name: "Acute malnutrition in humanitarian crisis"
+    program_area: Humanitarian
+    turns:
+      - question: "What is the acute malnutrition rate in South Sudan?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["acute malnutrition", "GAM", "wasting"]
+      - question: "Do you have data from 2023?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+
+  - id: humanitarian_002
+    name: "Immunization in fragile states"
+    program_area: Humanitarian
+    turns:
+      - question: "What is the DTP3 coverage in Somalia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["DTP3", "immunization"]
+      - question: "Compare with other Horn of Africa countries — Ethiopia, Eritrea, Djibouti"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+
+  # ── GENDER ─────────────────────────────────────────────────────────────
+
+  - id: gender_001
+    name: "Female genital mutilation in East Africa"
+    program_area: Gender
+    turns:
+      - question: "What is the FGM prevalence rate in Somalia?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["FGM", "female genital", "cutting"]
+      - question: "Compare with Ethiopia, Kenya, and Sudan"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true
+      - question: "Is there a breakdown by age group?"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+
+  - id: gender_002
+    name: "Adolescent birth rate"
+    program_area: Gender
+    turns:
+      - question: "What is the adolescent birth rate in Niger?"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          indicator_hint: ["adolescent birth", "teenage pregnancy", "fertility"]
+      - question: "Show the trend for Niger over time"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+      - question: "Compare with Mali and Chad"
+        expected_mode: A
+        assertions:
+          data_retrieved: true
+          multi_country: true

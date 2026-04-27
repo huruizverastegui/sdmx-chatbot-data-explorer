@@ -162,7 +162,7 @@ def _load_embeddings() -> Tuple[pd.DataFrame, np.ndarray]:
 
 
 def _rank_dataflow(agency: str, dataflow_id: str) -> int:
-    """Higher score = more likely to return live API data."""
+    """Higher score = more likely to return live API data with disaggregation."""
     score = 0
     if agency.upper() == "UNICEF":
         score += 10
@@ -170,6 +170,13 @@ def _rank_dataflow(agency: str, dataflow_id: str) -> int:
         score += 5
     if "ALL" not in dataflow_id.upper():
         score += 3
+    # Penalise multi-indicator "summary" dataflows — they aggregate across disaggregations
+    # and return only Total rows. Specialised dataflows (WASH_HOUSEHOLDS, NUTRITION, CME,
+    # EDUCATION, IMMUNISATION, etc.) return disaggregated data and are preferred.
+    _SUMMARY_FLOWS = {"CD2030", "CAP2030", "CDCOV", "CDDEM", "CDDRIVER", "CDT2",
+                      "CDEQUIPLOT", "GLOBAL_DATAFLOW"}
+    if dataflow_id.upper() in _SUMMARY_FLOWS or "CD2030" in dataflow_id.upper():
+        score -= 8
     return score
 
 
@@ -249,21 +256,8 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
     s.current_query_vec = query_vec  # stored for response validation in query_sdmx_api
     similarities = emb_matrix @ query_vec  # cosine similarity (vectors are pre-normalised)
 
-    # Get top-k indicator_ids by similarity that exist in the loaded partitions.
-    # Search 3× top_k candidates so deduplication doesn't starve the final list.
-    MIN_SIMILARITY = 0.40
-    available_ids = set(combined["indicator_id"].unique())
-    ranked = sorted(
-        ((float(similarities[i]), str(emb_df.at[i, "indicator_id"]))
-         for i in range(len(emb_df))
-         if str(emb_df.at[i, "indicator_id"]) in available_ids
-         and float(similarities[i]) >= MIN_SIMILARITY),
-        reverse=True,
-    )
-
     # Build lookups from the embeddings (canonical names/text used at index time).
-    # Using embedding text for deduplication avoids partitions where the same indicator_id
-    # was mapped to a different indicator name across countries (data inconsistency).
+    # Must be built before ranking so we can filter junk names during the sort.
     emb_text_lookup: dict = {
         str(emb_df.at[i, "indicator_id"]): str(emb_df.at[i, "text"])
         for i in range(len(emb_df))
@@ -272,6 +266,45 @@ def search_data_dictionary(query: str, countries: List[str], top_k: int = 8) -> 
         str(emb_df.at[i, "indicator_id"]): float(similarities[i])
         for i in range(len(emb_df))
     }
+
+    def _canonical_name(iid: str) -> str:
+        text = emb_text_lookup.get(iid, "")
+        return text.split(".")[0].strip() if text else iid
+
+    def _is_junk_indicator(iid: str) -> bool:
+        """Return True for indicators whose name is a bare number or too short to be meaningful."""
+        name = _canonical_name(iid)
+        return bool(re.fullmatch(r"[\d\s]+", name)) or len(re.sub(r"\s+", "", name)) < 4
+
+    # Year-span bonus: reward indicators with longer historical coverage.
+    # Computed per indicator_id over the loaded country partitions.
+    # Max 5% additive bonus so semantic similarity stays the primary signal.
+    year_span: Dict[str, int] = {}
+    for iid, grp in combined.groupby("indicator_id"):
+        yr_min = pd.to_numeric(grp["year_min"], errors="coerce").min()
+        yr_max = pd.to_numeric(grp["year_max"], errors="coerce").max()
+        if pd.notna(yr_min) and pd.notna(yr_max):
+            year_span[str(iid)] = int(yr_max) - int(yr_min)
+    max_span = max(year_span.values(), default=1) or 1
+
+    # Get top-k indicator_ids by score that exist in the loaded partitions.
+    # Search 3× top_k candidates so deduplication doesn't starve the final list.
+    MIN_SIMILARITY = 0.40
+    available_ids = set(combined["indicator_id"].unique())
+    ranked = sorted(
+        (
+            (
+                float(similarities[i])
+                + 0.05 * (year_span.get(str(emb_df.at[i, "indicator_id"]), 0) / max_span),
+                str(emb_df.at[i, "indicator_id"]),
+            )
+            for i in range(len(emb_df))
+            if str(emb_df.at[i, "indicator_id"]) in available_ids
+            and float(similarities[i]) >= MIN_SIMILARITY
+            and not _is_junk_indicator(str(emb_df.at[i, "indicator_id"]))
+        ),
+        reverse=True,
+    )
 
     # Group ranked candidates by concept name. Same-concept variants (e.g. B12, COB12,
     # IM_BCG all named "Immunization - BCG") are merged: their country coverage is unioned
@@ -721,6 +754,22 @@ def _format_csv_response(df: pd.DataFrame, indicator_id: str, geography_id: str,
     if df.empty:
         return f"API returned an empty CSV from {url}."
 
+    # Fix 1: Multi-indicator dataflows — filter to the requested indicator only.
+    # Some dataflows (CD2030, CDDEM, etc.) pack many indicators per row;
+    # without filtering the agent sees thousands of rows for unrelated indicators.
+    _INDICATOR_COLS = [
+        "INDICATOR", "CDCOVERAGEINDICATORS", "CDDDEMINDICS",
+        "CDDRIVERINDICATORS", "CDT2INDICS", "UNICEF_INDICATOR", "SITREP_INDICATOR",
+    ]
+    for ind_col in _INDICATOR_COLS:
+        if ind_col in df.columns:
+            unique_inds = df[ind_col].dropna().unique()
+            if len(unique_inds) > 1:
+                mask = df[ind_col].astype(str) == str(indicator_id)
+                if mask.sum() > 0:
+                    df = df[mask].copy()
+            break
+
     lines = [
         f"Source URL: {url}",
         f"Indicator: {indicator_id}  |  Geography: {geography_id}",
@@ -757,9 +806,9 @@ def _format_csv_response(df: pd.DataFrame, indicator_id: str, geography_id: str,
 
 def run_quality_checks(
     data_summary: str,
-    indicator_id: str,
-    indicator_name: str,
-    geography_id: str,
+    indicator_id: str = "",
+    indicator_name: str = "",
+    geography_id: str = "",
 ) -> str:
     """Validate retrieved SDMX data and return a PASS / PARTIAL / FAIL report."""
     issues: List[str] = []
@@ -843,6 +892,9 @@ _NON_DISAGG_COLS = {
     "DEFINITION", "MDG_REGION", "REF_PERIOD", "COVERAGE_TIME",
     "OBS_VALUE_CHARACTER", "OBS_CONF", "OBS_FOOTNOTE",
     "COUNTRY_NOTES", "SERIES_FOOTNOTE", "SOURCE_LINK",
+    # Internal / geographic hierarchy columns — not useful as chart breakdowns
+    "UCODE", "CDAREAS", "CDUNIT", "Unit", "CV_PERCENT",
+    "SURVEY_YEAR", "Areas", "Country", "DATAFLOW",
 }
 
 
@@ -859,21 +911,71 @@ def get_data_dimensions() -> str:
 
     breakable: list[str] = []      # columns with real sub-categories (can be used for color_by)
     total_only: list[str] = []     # columns present but only aggregate/total value
+    subnational: list[str] = []    # subnational label columns
+
+    # Subnational label columns — surfaced separately, not as standard breakdowns
+    _SUBNATIONAL_COLS = {"SUBREGION", "Subregion", "SUBNATIONAL_AREA", "Subnational area"}
+
+    # Build set of all Title Case column names so we can skip redundant CODE columns
+    # when their human-readable label equivalent exists (e.g. skip SEX when "Sex" is present)
+    all_cols_set = set(combined.columns)
+
+    def _has_label_equivalent(code_col: str) -> bool:
+        """Return True if an ALL_CAPS code column has a Title Case label column in the data."""
+        if not code_col.isupper():
+            return False
+        title = code_col.title()
+        if title in all_cols_set:
+            return True
+        # Handle common two-word patterns (WEALTH_QUINTILE → Wealth Quintile)
+        spaced = code_col.replace("_", " ").title()
+        return spaced in all_cols_set
 
     for col in combined.columns:
         if col in _NON_DISAGG_COLS or col.startswith("_"):
             continue
+
+        # Subnational columns — collect separately
+        if col in _SUBNATIONAL_COLS:
+            unique_vals = [str(v) for v in combined[col].dropna().unique()]
+            if len(unique_vals) > 1:
+                sample = sorted(unique_vals)[:5]
+                suffix = f" … ({len(unique_vals)} total)" if len(unique_vals) > 5 else ""
+                subnational.append(f"  {col}: {sample}{suffix}")
+            continue
+
+        # Skip ALL_CAPS code column when its label equivalent is present
+        if _has_label_equivalent(col):
+            continue
+
         unique_vals = [str(v) for v in combined[col].dropna().unique()]
         if not unique_vals:
             continue
         non_total = [v for v in unique_vals if v not in _TOTAL_CODES]
         if len(non_total) > 1:
+            # Guard: only list as breakable if the non-total rows have actual OBS_VALUE data.
+            # Some dataflows carry disaggregation codes but leave those rows null.
+            if "OBS_VALUE" in combined.columns:
+                non_total_mask = combined[col].astype(str).isin(non_total)
+                non_total_obs = pd.to_numeric(
+                    combined.loc[non_total_mask, "OBS_VALUE"], errors="coerce"
+                )
+                if non_total_obs.notna().sum() == 0:
+                    total_only.append(
+                        f"  {col} (codes present but all disaggregated rows have null OBS_VALUE"
+                        f" — no breakdown data available)"
+                    )
+                    continue
             vals_preview = sorted(non_total)[:12]
             suffix = f" … ({len(non_total)} total)" if len(non_total) > 12 else ""
             breakable.append(f"  {col}: {vals_preview}{suffix}")
         else:
-            # Column exists in the data but only carries an aggregate/total value
-            total_only.append(f"  {col} (only aggregate value — no breakdown available)")
+            # Column exists in the data but only carries an aggregate/total value.
+            # Report the actual code(s) so the LLM knows this is auto-handled.
+            agg_vals_present = sorted({str(v) for v in combined[col].dropna().unique()})
+            total_only.append(
+                f"  {col}: {agg_vals_present} — auto-collapsed, do NOT add to filters"
+            )
 
     # Report the time range in the fetched data
     time_col = next((c for c in ("TIME_PERIOD", "Year", "YEAR") if c in combined.columns), None)
@@ -893,6 +995,10 @@ def get_data_dimensions() -> str:
 
     lines.append("\nDimensions present but NOT disaggregated in this dataset:")
     lines += total_only if total_only else ["  None."]
+
+    if subnational:
+        lines.append("\nSubnational data available (can be used for color_by or filters):")
+        lines += subnational
 
     # Geography info for country-level filters
     _GEO_LABEL_COLS = ["Geographic area", "Reference Areas"]
@@ -1038,9 +1144,11 @@ TOOLS = [
                     "filters": {
                         "type": "object",
                         "description": (
-                            "Column-value pairs to filter rows before plotting, e.g. "
-                            "{\"SEX\": \"_T\", \"WEALTH_QUINTILE\": \"_T\"}. "
-                            "Use this to remove unwanted disaggregations."
+                            "Only for TIME_PERIOD and geography selection. "
+                            "Examples: {\"TIME_PERIOD\": \">=2000\"}, {\"TIME_PERIOD\": \"2022\"}, "
+                            "{\"Geographic area\": [\"Cambodia\", \"Vietnam\"]}. "
+                            "Do NOT add Sex, Age, Wealth Quintile, Domain, or similar — "
+                            "those are auto-collapsed by the rendering engine."
                         ),
                     },
                 },
@@ -1121,20 +1229,29 @@ SYSTEM_PROMPT = (
     "3. Call query_sdmx_api ONLY for countries where the selected indicator is available. "
     "   The tool fetches the full available history — do NOT filter by year here. "
     "   Note the exact column names in each response — you will need them for the chart.\n"
-    "   If a country has no data, mention it clearly in your final answer.\n"
+    "   If query_sdmx_api returns 'No data found', immediately retry with the next most relevant "
+    "   indicator from your search results (try up to 2 alternatives before giving up).\n"
+    "   If a country has no data across all tried indicators, mention it clearly in your final answer.\n"
     "4. Call get_data_dimensions to discover what breakdown dimensions exist in the fetched data.\n"
     "5. Call create_visualization to specify the chart. "
     "   Apply these rules:\n"
-    "   • Multiple countries, single indicator over time → line chart, color by geography column.\n"
+    "   • CRITICAL — if data was fetched for multiple countries, you MUST set color_by to the "
+    "     geography column (use 'Geographic area' if present, else 'REF_AREA'). "
+    "     Never leave color_by empty when multiple countries are in the data.\n"
     "   • Single country over time → line chart, filter all disaggregations to their total value.\n"
     "   • Comparison at a single point in time → bar chart, x = geography or category.\n"
     "   • CRITICAL — avoid color_by on high-cardinality columns (>8 unique values). Instead:\n"
     "     - Use filters to pick the most relevant value (e.g. a specific age group or total).\n"
     "     - Or use it as the x-axis in a bar chart filtered to the latest time point.\n"
-    "   • Always filter out irrelevant disaggregations to their total/aggregate value "
-    "     (e.g. SEX='_T', AGE='_T') unless the user specifically asks for a breakdown.\n"
+    "   • Do NOT add aggregate dimension filters (Sex, Age, Wealth Quintile, Domain, etc.) "
+    "     to filters — these are auto-collapsed by the rendering engine. Only use filters "
+    "     for TIME_PERIOD and geographic area.\n"
     "   • If the user asked about a specific year, add filters={'TIME_PERIOD': '2019'} (as a string). "
-    "     For a year range, leave TIME_PERIOD unfiltered and let the chart show the full trend.\n"
+    "     For a year range, use '>=YYYY' syntax, e.g. filters={'TIME_PERIOD': '>=2000'}. "
+    "     To keep only specific countries, use a list: filters={'Geographic area': ['Cambodia', 'Vietnam']}.\n"
+    "   • CRITICAL — if run_quality_checks or the data summary shows zero non-null OBS_VALUE, "
+    "     do NOT call create_visualization. Explain the data quality issue to the user instead.\n"
+    "   • The chart title must mention ALL countries for which data was fetched.\n"
     "6. Call run_quality_checks for each dataset fetched.\n"
     "7. Summarise findings. End your answer with:\n"
     "   • An '**Available breakdowns:**' line listing ONLY the dimensions shown under "
@@ -1146,7 +1263,14 @@ SYSTEM_PROMPT = (
     "═══ MODE B — Visualise differently (same data, different view) ═══\n"
     "DO NOT call search_data_dictionary, ask_user_to_select_indicator, or query_sdmx_api.\n"
     "1. Call get_data_dimensions to get the exact column names, values, and TIME_PERIOD range available.\n"
-    "2. Call create_visualization with the appropriate color_by or filters for the requested breakdown.\n"
+    "2. CRITICAL — you MUST call create_visualization in every Mode B turn. "
+    "   Never answer Mode B with text alone, even if you already know the values from context.\n"
+    "   • If the requested breakdown IS available: set color_by to that column.\n"
+    "   • If the requested breakdown is NOT available: still call create_visualization to redisplay the "
+    "     best existing view (e.g. keep the previous color_by or use a Total filter), then explain in "
+    "     your text reply which breakdowns ARE and ARE NOT available.\n"
+    "   • WARNING: Do NOT answer with text values from conversation history instead of calling tools. "
+    "     Even if you can recall the numbers, the user needs an updated chart, not a text summary.\n"
     "   • If the user restricts to a specific country (e.g. 'just for Thailand'), add a geography "
     "     filter using the exact column name from get_data_dimensions "
     "     (e.g. filters={'Geographic area': 'Thailand'} or filters={'REF_AREA': 'THA'}).\n"

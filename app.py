@@ -155,7 +155,8 @@ def run_agent_until_pause(agent_messages: list) -> dict:
 _TOTAL_VALUES = {"_T", "Total", "TOTAL", "_ALL", "All"}
 
 # Values that mean "not applicable / no breakdown" — strip from breakdown dimensions in charts
-_NOT_APPLICABLE_VALUES = {"_Z", "_NA", "Not applicable", "Not Applicable", "N/A", "NA", "Unknown"}
+# "nan" covers pandas NaN converted to string (e.g. empty label cells for _Z-coded rows)
+_NOT_APPLICABLE_VALUES = {"_Z", "_NA", "Not applicable", "Not Applicable", "N/A", "NA", "Unknown", "nan", ""}
 
 # Columns that are not disaggregation dimensions — never filter these
 _NON_DISAGG_COLS = {
@@ -168,6 +169,9 @@ _NON_DISAGG_COLS = {
     "DEFINITION", "MDG_REGION", "REF_PERIOD", "COVERAGE_TIME",
     "OBS_VALUE_CHARACTER", "OBS_CONF", "OBS_FOOTNOTE",
     "COUNTRY_NOTES", "SERIES_FOOTNOTE", "SOURCE_LINK",
+    # Internal / geographic hierarchy columns — not useful as chart breakdowns
+    "UCODE", "CDAREAS", "CDUNIT", "Unit", "CV_PERCENT",
+    "SURVEY_YEAR", "Areas", "Country", "DATAFLOW",
 }
 
 
@@ -216,19 +220,39 @@ def _resolve_duplicates(
         return df, applied
 
     result = df.copy()
+    # Normalize to UPPER_SNAKE_CASE so that code columns (WEALTH_QUINTILE) and their
+    # label equivalents (Wealth Quintile) are treated as the same dimension.
+    group_cols_normalized = {gc.upper().replace(" ", "_") for gc in group_cols}
     candidate_cols = [
         c for c in df.columns
-        if c not in _NON_DISAGG_COLS and c not in set(group_cols) and c != y
+        if c not in _NON_DISAGG_COLS
+        and c.upper().replace(" ", "_") not in group_cols_normalized
+        and c != y
     ]
 
+    _AGG_CODES = _TOTAL_VALUES | _NOT_APPLICABLE_VALUES
     for col in candidate_cols:
         if result.groupby(group_cols)[y].count().max() <= 1:
             break
-        unique_vals = set(result[col].dropna().unique())
-        total_val = next((v for v in unique_vals if str(v) in _TOTAL_VALUES), None)
-        if total_val is not None and len(unique_vals) > 1:
-            result = result[result[col] == total_val]
-            applied.append(f"{col}='{total_val}'")
+        unique_val_strs = {str(v) for v in result[col].dropna().unique()}
+        # If every value is already an aggregate/not-applicable code there is no real
+        # breakdown to collapse — filtering to one code would drop rows that use a
+        # different aggregate convention (e.g. _Z vs _T). Skip this column.
+        if not (unique_val_strs - _AGG_CODES):
+            continue
+        # Column has real category values mixed with aggregate-coded rows.
+        # Keep only the aggregate-coded rows (both _T and _Z are valid "total/not applicable"
+        # conventions across SDMX dataflows — e.g. PELOTAS uses _Z where UNICEF uses _T).
+        agg_in_col = unique_val_strs & _AGG_CODES
+        if agg_in_col:
+            result = result[result[col].astype(str).isin(_AGG_CODES)]
+            applied.append(f"{col}=total")
+        elif len(unique_val_strs) > 1:
+            # No aggregate code in this column (e.g. Domain = CO/EQ/IC).
+            # Pick the most-represented value to get one consistent series.
+            most_common = str(result[col].value_counts().index[0])
+            result = result[result[col].astype(str) == most_common]
+            applied.append(f"{col}={most_common}")
 
     return result, applied
 
@@ -245,26 +269,66 @@ def _render_chart(dfs: list, spec: dict, key: str = "") -> None:
 
     # Apply filters specified by the LLM, but never filter on the color_by column
     # (that would collapse the breakdown the user asked for).
+    # Supports three value forms:
+    #   - list  → keep rows where col value is IN the list  (e.g. multi-country)
+    #   - ">=N" / "<=N" / ">N" / "<N"  → numeric range on TIME_PERIOD or similar
+    #   - plain string → exact match
     # Geo filters get special handling: try column aliases when the exact name is missing.
-    color_lower = color.lower() if color else ""
+    # Normalize to UPPER_SNAKE_CASE for code/label-agnostic comparison:
+    # WEALTH_QUINTILE and "Wealth Quintile" are the same dimension.
+    color_normalized = color.upper().replace(" ", "_") if color else ""
     _GEO_FILTER_ALIASES = ["Geographic area", "Reference Areas", "REF_AREA", "GEOGRAPHIC_AREA"]
+    _RANGE_RE = re.compile(r"^(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$")
     for col, val in spec.get("filters", {}).items():
-        if col.lower() == color_lower:
-            continue  # skip — this column is the breakdown dimension
-        if col in combined.columns:
-            filtered = combined[combined[col] == val]
-            if not filtered.empty:
-                combined = filtered
-        else:
-            # Try geo column aliases when the LLM uses a variant name
+        if col.upper().replace(" ", "_") == color_normalized:
+            continue  # skip — this column is the breakdown dimension (code or label form)
+
+        # Resolve column name, with geo alias fallback
+        target_col = col
+        if target_col not in combined.columns:
             col_words = col.lower().replace("_", " ")
             if any(g in col_words for g in ("geo", "area", "country", "region", "ref")):
                 for alias in _GEO_FILTER_ALIASES:
                     if alias in combined.columns:
-                        filtered = combined[combined[alias] == val]
-                        if not filtered.empty:
-                            combined = filtered
-                            break
+                        target_col = alias
+                        break
+        if target_col not in combined.columns:
+            continue
+
+        # List filter: keep rows IN the list
+        if isinstance(val, list):
+            str_vals = [str(v) for v in val]
+            filtered = combined[combined[target_col].astype(str).isin(str_vals)]
+            if not filtered.empty:
+                combined = filtered
+            continue
+
+        val_str = str(val)
+
+        # Range filter: >=2000, <=2022, etc.
+        m = _RANGE_RE.match(val_str.strip())
+        if m:
+            op, num = m.group(1), float(m.group(2))
+            col_num = pd.to_numeric(combined[target_col], errors="coerce")
+            ops = {">=": col_num.__ge__, "<=": col_num.__le__,
+                   ">":  col_num.__gt__, "<":  col_num.__lt__}
+            mask = ops[op](num) & col_num.notna()
+            if mask.any():
+                combined = combined[mask]
+            continue
+
+        # Exact string match.
+        # When filtering to an aggregate/not-applicable code (e.g. SEX='_T'),
+        # treat _Z (Not applicable) and _T (Total) as equivalent — both mean
+        # "no real breakdown here". Some dataflows use _Z where others use _T,
+        # so an exact match on _T would silently drop valid _Z rows.
+        _AGG_FILTER_CODES = _TOTAL_VALUES | _NOT_APPLICABLE_VALUES
+        if val_str in _AGG_FILTER_CODES:
+            filtered = combined[combined[target_col].astype(str).isin(_AGG_FILTER_CODES)]
+        else:
+            filtered = combined[combined[target_col] == val]
+        if not filtered.empty:
+            combined = filtered
     chart_type = spec.get("chart_type", "line")
 
     # Prefer the actual indicator name from the SDMX response over the LLM-generated title.
@@ -296,19 +360,21 @@ def _render_chart(dfs: list, spec: dict, key: str = "") -> None:
     combined[y] = pd.to_numeric(combined[y], errors="coerce")
     combined = combined.dropna(subset=[y])
 
-    # Resolve any remaining duplicates per (x, color_by) by filtering to Total rows
-    combined, auto_filters = _resolve_duplicates(combined, x, y, color)
-    if auto_filters:
-        st.caption(f"Showing aggregate totals — auto-filtered: {', '.join(auto_filters)}")
-
-
-    # Strip "Not applicable" / _Z rows from the breakdown dimension when real categories exist
+    # Strip "Not applicable" / _Z rows from the breakdown dimension when real categories exist.
+    # Must run BEFORE _resolve_duplicates so that domains without an aggregate row for the
+    # breakdown dimension (e.g. CO uses _Z for Wealth) are removed before the
+    # duplicate-collapsing pass picks a single domain.
     if color and color in combined.columns:
         unique_color_vals = set(combined[color].dropna().astype(str).unique())
         na_in_data = unique_color_vals & _NOT_APPLICABLE_VALUES
         real_vals = unique_color_vals - _NOT_APPLICABLE_VALUES
         if na_in_data and real_vals:
             combined = combined[~combined[color].astype(str).isin(na_in_data)]
+
+    # Resolve any remaining duplicates per (x, color_by) by filtering to Total rows
+    combined, auto_filters = _resolve_duplicates(combined, x, y, color)
+    if auto_filters:
+        st.caption(f"Showing aggregate totals — auto-filtered: {', '.join(auto_filters)}")
 
     # Safeguard: cap high-cardinality color dimensions to top 8 by mean value
     MAX_COLOR_SERIES = 8
@@ -441,6 +507,7 @@ def _init_state() -> None:
         "awaiting_selection": False,
         "selection_question": "",
         "pending_tool_call_id": None,
+        "show_more_indicators": False,
         "session_ctx": {},
         "agent_session": AgentSession(),
     }
@@ -555,13 +622,21 @@ if st.session_state.awaiting_selection:
         preamble = re.split(r"\n\s*1\.", st.session_state.selection_question)[0].strip()
         st.markdown(preamble)
 
-        if options:
+        top_options = options[:3]
+        more_options = options[3:]
+
+        if top_options:
+            visible_options = options if st.session_state.show_more_indicators else top_options
             chosen_text = st.radio(
                 "Select an indicator:",
-                options=options,
+                options=visible_options,
                 index=0,
                 key="indicator_radio",
             )
+            if more_options and not st.session_state.show_more_indicators:
+                if st.button(f"Show {len(more_options)} more option{'s' if len(more_options) != 1 else ''}"):
+                    st.session_state.show_more_indicators = True
+                    st.rerun()
         else:
             chosen_text = st.text_input("Your choice:", key="indicator_text")
 
@@ -594,6 +669,7 @@ if st.session_state.awaiting_selection:
             st.session_state.awaiting_selection = True
             st.session_state.selection_question = result["question"]
             st.session_state.pending_tool_call_id = result["tool_call_id"]
+            st.session_state.show_more_indicators = False
 
         st.rerun()
 
@@ -620,6 +696,7 @@ else:
             st.session_state.awaiting_selection = True
             st.session_state.selection_question = result["question"]
             st.session_state.pending_tool_call_id = result["tool_call_id"]
+            st.session_state.show_more_indicators = False
         elif result["status"] == "done":
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": result["answer"]}
