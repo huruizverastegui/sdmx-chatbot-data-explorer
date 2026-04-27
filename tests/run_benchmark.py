@@ -291,6 +291,16 @@ def _structural_viz_checks(viz_spec: dict, dfs: list) -> dict:
         checks["line_n_points"] = int(filtered[x_col].nunique())
         checks["line_has_trend"] = checks["line_n_points"] >= 2
 
+    # Detect single time period in data — line chart here would be a single dot
+    time_col = next(
+        (c for c in ("TIME_PERIOD", "Year", "YEAR") if c in filtered.columns), None
+    )
+    if time_col:
+        n_time = int(filtered[time_col].nunique())
+        checks["n_time_periods"] = n_time
+        if n_time == 1 and chart_type == "line":
+            checks["single_year_line_warning"] = True
+
     return checks
 
 
@@ -406,6 +416,24 @@ def _score_turn(turn: TurnRecord) -> None:
         breakdown_text = " ".join(json.dumps(c["args"]).lower() for c in viz_calls)
         turn.scores["breakdown_requested"] = breakdown_kw.lower() in breakdown_text
 
+    # searches_before_clarifying: search_data_dictionary must be the very first tool call.
+    # Fails if agent gives text-only response (no tools called) OR calls something else first.
+    if assertions.get("searches_before_clarifying"):
+        if calls:
+            turn.scores["searches_before_clarifying"] = calls[0]["name"] == "search_data_dictionary"
+        else:
+            turn.scores["searches_before_clarifying"] = False
+
+    # chart_type: create_visualization must be called with the specified chart_type value.
+    expected_chart_type = assertions.get("chart_type")
+    if expected_chart_type:
+        viz_calls = [c for c in calls if c["name"] == "create_visualization"]
+        if viz_calls:
+            actual_type = (viz_calls[-1]["args"].get("chart_type") or "").lower()
+            turn.scores["chart_type"] = actual_type == expected_chart_type.lower()
+        else:
+            turn.scores["chart_type"] = False
+
     turn.scores["no_error"] = turn.error is None
 
 
@@ -516,6 +544,8 @@ def print_report(records: List[FlowRecord]) -> None:
                         f"y_values={vc.get('y_has_values','?')}  "
                         + (f"color_unique={vc.get('color_n_unique','?')}  " if 'color_n_unique' in vc else "")
                         + (f"line_pts={vc.get('line_n_points','?')}  " if 'line_n_points' in vc else "")
+                        + (f"time_periods={vc.get('n_time_periods','?')}  " if 'n_time_periods' in vc else "")
+                        + ("⚠ SINGLE_YEAR_LINE  " if vc.get('single_year_line_warning') else "")
                         + (f"filters⚠={vc['filter_warnings']}" if vc.get('filter_warnings') else "")
                     )
                     llm = vc.get("llm_eval", {})

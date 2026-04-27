@@ -14,6 +14,7 @@ flows:
       - question: "What is the DTP3 immunization coverage in Thailand?"
         expected_mode: A
         assertions:
+          searches_before_clarifying: true
           data_retrieved: true
           visualization_created: true
           indicator_hint: ["DTP3", "diphtheria", "immunization"]
@@ -85,6 +86,7 @@ flows:
       - question: "What is the under-5 mortality rate in Cambodia?"
         expected_mode: A
         assertions:
+          searches_before_clarifying: true
           data_retrieved: true
           indicator_hint: ["mortality", "under-5", "U5MR", "CME"]
       - question: "Show me the trend since 2000"
@@ -129,6 +131,7 @@ flows:
         expected_mode: B
         assertions:
           visualization_created: true
+          chart_type: "bar"
 
   # ── NUTRITION ──────────────────────────────────────────────────────────
 
@@ -139,6 +142,7 @@ flows:
       - question: "What is the stunting rate among children under 5 in Bangladesh?"
         expected_mode: A
         assertions:
+          searches_before_clarifying: true
           data_retrieved: true
           indicator_hint: ["stunting", "height-for-age"]
       - question: "Break it down by wealth quintile"
@@ -328,6 +332,7 @@ flows:
         expected_mode: B
         assertions:
           visualization_created: true
+          chart_type: "bar"
 
   - id: protection_003
     name: "Birth registration in Central Africa"
@@ -445,3 +450,133 @@ flows:
         assertions:
           data_retrieved: true
           multi_country: true
+
+  # ── AGENT BEHAVIOR ─────────────────────────────────────────────────────────
+  # These flows verify the behavioral fixes: search-first, mode-switching,
+  # and single-year bar chart enforcement.
+
+  - id: behavior_001
+    name: "Search before clarifying on vague Mode A question"
+    program_area: Behavior
+    turns:
+      - question: "Tell me about child nutrition in Chad"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+      - question: "What about malnutrition trends in Niger?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+
+  - id: behavior_002
+    name: "Smooth mode switch: B back to A without stale chart"
+    program_area: Behavior
+    turns:
+      - question: "What is the DTP3 immunization rate in Cambodia?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["DTP3", "immunization"]
+      - question: "Break it down by sex"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "sex"
+      - question: "How many children are under 5 in Thailand?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+
+  - id: behavior_003
+    name: "Bar chart enforced for explicit single-point-in-time comparison"
+    program_area: Behavior
+    turns:
+      - question: "Compare the maternal mortality ratio in Peru, Bolivia, and Ecuador"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          multi_country: true
+          indicator_hint: ["maternal", "mortality"]
+      - question: "Show me only the latest year as a bar chart"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          chart_type: "bar"
+
+  # ── DISAGGREGATION REGRESSION ──────────────────────────────────────────────
+  # Specific regression tests for the disaggregation pipeline fixes
+  # (CONSOLIDATED multi-domain, RAW_OBS_VALUE backfill, _resolve_duplicates).
+
+  - id: disagg_001
+    name: "CONSOLIDATED dataflow wealth quintile breakdown (DTP3 Cambodia)"
+    program_area: Disaggregation
+    turns:
+      - question: "What is the DTP3 immunization rate in Cambodia?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["DTP3", "immunization"]
+      - question: "Break it down by wealth quintile"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "wealth"
+
+  - id: disagg_002
+    name: "CONSOLIDATED dataflow sex breakdown (ANC Ethiopia)"
+    program_area: Disaggregation
+    turns:
+      - question: "What is the antenatal care coverage in Ethiopia?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["antenatal", "ANC", "prenatal"]
+      - question: "Show me the breakdown by sex"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "sex"
+
+  - id: disagg_003
+    name: "Wealth quintile breakdown where RAW_OBS_VALUE backfill is needed"
+    program_area: Disaggregation
+    turns:
+      - question: "What is the birth registration rate in Nigeria?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["birth registration", "civil registration"]
+      - question: "Break it down by wealth quintile"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "wealth"
+
+  - id: disagg_004
+    name: "Residence (urban/rural) breakdown after total trend"
+    program_area: Disaggregation
+    turns:
+      - question: "What is the open defecation rate in India?"
+        expected_mode: A
+        assertions:
+          searches_before_clarifying: true
+          data_retrieved: true
+          visualization_created: true
+          indicator_hint: ["open defecation", "sanitation", "ODF"]
+      - question: "Split by urban and rural"
+        expected_mode: B
+        assertions:
+          visualization_created: true
+          breakdown_requested: "residence"

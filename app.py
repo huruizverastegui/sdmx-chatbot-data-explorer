@@ -161,7 +161,7 @@ _NOT_APPLICABLE_VALUES = {"_Z", "_NA", "Not applicable", "Not Applicable", "N/A"
 # Columns that are not disaggregation dimensions — never filter these
 _NON_DISAGG_COLS = {
     "TIME_PERIOD", "Year", "YEAR",
-    "OBS_VALUE", "LOWER_BOUND", "UPPER_BOUND", "OBS_STATUS", "Observation Status",
+    "OBS_VALUE", "RAW_OBS_VALUE", "LOWER_BOUND", "UPPER_BOUND", "OBS_STATUS", "Observation Status",
     "REF_AREA", "Geographic area", "Reference Areas",
     "INDICATOR", "Indicator",
     "UNIT_MEASURE", "Unit of measure",
@@ -392,6 +392,26 @@ def _render_chart(dfs: list, spec: dict, key: str = "") -> None:
                 f"by average {y} (out of {len(unique_vals)} values in '{color}')."
             )
 
+    # Switch to bar chart when only one time period is in the data — a line with a
+    # single point is meaningless. Swap the breakdown dimension to the x-axis.
+    _TIME_COLS = {"TIME_PERIOD", "Year", "YEAR"}
+    if chart_type == "line" and x in _TIME_COLS and x in combined.columns:
+        if combined[x].dropna().nunique() <= 1:
+            chart_type = "bar"
+            if color and color in combined.columns:
+                # Breakdown (e.g. Wealth Quintile) becomes x-axis.
+                # Use geography as color if multiple countries are present.
+                geo_col = next(
+                    (c for c in _GEO_COLS if c in combined.columns and combined[c].nunique() > 1),
+                    None,
+                )
+                x, color = color, geo_col
+            else:
+                # No breakdown — use geography as x-axis.
+                geo_col = next((c for c in _GEO_COLS if c in combined.columns), None)
+                if geo_col:
+                    x = geo_col
+
     unit_col = next((c for c in ("Unit of measure", "UNIT_MEASURE") if c in combined.columns), None)
     y_label = combined[unit_col].iloc[0] if unit_col and unit_col in combined.columns else y
 
@@ -537,6 +557,11 @@ def _attach_chart_to_last_message() -> None:
     """Store current data (and optional chart spec) inside the last assistant message."""
     dfs = get_fetched_dfs()
     if not dfs:
+        return
+    # pending_reset=True means a new question was submitted but no new data was fetched
+    # this turn (e.g. agent asked a clarifying question). Don't re-attach stale data
+    # from the previous question to the new response.
+    if st.session_state.agent_session.pending_reset:
         return
     chart_data = {
         "spec": get_viz_spec(),   # may be None — data still shown without a chart

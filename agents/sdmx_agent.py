@@ -587,6 +587,14 @@ def _fetch_dataflow(
             try:
                 df = pd.read_csv(StringIO(resp.text))
                 if not df.empty:
+                    # Some dataflows (e.g. CRBA) store survey values in RAW_OBS_VALUE
+                    # and leave OBS_VALUE null. Backfill so all downstream logic works.
+                    if "RAW_OBS_VALUE" in df.columns and "OBS_VALUE" in df.columns:
+                        raw = pd.to_numeric(df["RAW_OBS_VALUE"], errors="coerce")
+                        obs = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
+                        needs_fill = obs.isna() & raw.notna()
+                        if needs_fill.any():
+                            df["OBS_VALUE"] = obs.where(~needs_fill, raw)
                     return df, url
             except Exception:
                 pass
@@ -884,7 +892,7 @@ def run_quality_checks(
 
 _NON_DISAGG_COLS = {
     "TIME_PERIOD", "Year", "YEAR",
-    "OBS_VALUE", "LOWER_BOUND", "UPPER_BOUND", "OBS_STATUS", "Observation Status",
+    "OBS_VALUE", "RAW_OBS_VALUE", "LOWER_BOUND", "UPPER_BOUND", "OBS_STATUS", "Observation Status",
     "REF_AREA", "Geographic area", "Reference Areas",
     "INDICATOR", "Indicator",
     "UNIT_MEASURE", "Unit of measure",
@@ -979,16 +987,24 @@ def get_data_dimensions() -> str:
 
     # Report the time range in the fetched data
     time_col = next((c for c in ("TIME_PERIOD", "Year", "YEAR") if c in combined.columns), None)
+    unique_years: list = []
     if time_col:
         years = pd.to_numeric(combined[time_col], errors="coerce").dropna()
         if not years.empty:
-            time_range = f"{int(years.min())}–{int(years.max())}"
+            unique_years = sorted(years.unique().astype(int).tolist())
+            time_range = f"{unique_years[0]}–{unique_years[-1]}" if len(unique_years) > 1 else str(unique_years[0])
         else:
             time_range = "unknown"
     else:
         time_range = "unknown"
 
-    lines = [f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s). Time range in data: {time_range}."]
+    header = f"Fetched data: {len(combined):,} rows, {len(s.fetched_dfs)} dataset(s). Time range in data: {time_range}."
+    if len(unique_years) == 1:
+        header += (
+            f" ONLY ONE TIME PERIOD ({unique_years[0]}) — use chart_type='bar', "
+            f"set x_column to the breakdown dimension (e.g. 'Wealth Quintile' or 'Geographic area'), NOT 'TIME_PERIOD'."
+        )
+    lines = [header]
 
     lines.append("\nBreakdowns available (can be used for color_by):")
     lines += breakable if breakable else ["  None."]
@@ -1126,7 +1142,11 @@ TOOLS = [
                     "chart_type": {
                         "type": "string",
                         "enum": ["line", "bar"],
-                        "description": "Use 'line' for time trends, 'bar' for comparisons at a point in time.",
+                        "description": (
+                            "Use 'line' for time trends (multiple years). "
+                            "Use 'bar' for comparisons at a single point in time, "
+                            "or whenever get_data_dimensions reports only one time period."
+                        ),
                     },
                     "x_column": {
                         "type": "string",
@@ -1218,6 +1238,10 @@ SYSTEM_PROMPT = (
     "      • User only wants a different view/breakdown of the existing data\n\n"
 
     "═══ MODE A — Fetch (or re-fetch) data ═══\n"
+    "CRITICAL: In Mode A, ALWAYS call search_data_dictionary as your very first action. "
+    "Never ask the user for clarification before searching — make a reasonable best guess "
+    "at the query and search immediately. The search results will show what is available "
+    "and the user can then refine their choice.\n"
     "1. Call search_data_dictionary to retrieve the top matching indicators.\n"
     "   The results show, for each indicator, which countries it is available for "
     "   and which are NOT available.\n"
@@ -1238,8 +1262,9 @@ SYSTEM_PROMPT = (
     "   • CRITICAL — if data was fetched for multiple countries, you MUST set color_by to the "
     "     geography column (use 'Geographic area' if present, else 'REF_AREA'). "
     "     Never leave color_by empty when multiple countries are in the data.\n"
-    "   • Single country over time → line chart, filter all disaggregations to their total value.\n"
-    "   • Comparison at a single point in time → bar chart, x = geography or category.\n"
+    "   • Single country over time (multiple years) → line chart.\n"
+    "   • Comparison at a single point in time, OR get_data_dimensions reports only one time period "
+    "→ bar chart, x = breakdown dimension or geography (NOT TIME_PERIOD).\n"
     "   • CRITICAL — avoid color_by on high-cardinality columns (>8 unique values). Instead:\n"
     "     - Use filters to pick the most relevant value (e.g. a specific age group or total).\n"
     "     - Or use it as the x-axis in a bar chart filtered to the latest time point.\n"
